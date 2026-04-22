@@ -1,0 +1,18 @@
+meta {
+  name: Register User
+  type: http
+  seq: 5
+}
+
+post {
+  url: {{AUTHSERVICE_HOST}}:{{AUTHSERVICE_PORT}}/api/v1/auth/register
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+    "email": "maa.rten.heremans@gmail.com",
+    "password": "GUmge&ghjXGWGBx9rxu6"
+  }
+}

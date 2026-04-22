@@ -1,0 +1,11 @@
+meta {
+  name: Ping [*]
+  type: http
+  seq: 6
+}
+
+get {
+  url: {{AUTHSERVICE_HOST}}:{{AUTHSERVICE_PORT}}/api/v1/health/ping
+  body: none
+  auth: inherit
+}

@@ -1,0 +1,26 @@
+meta {
+  name: List Service Clients
+  type: http
+  seq: 4
+}
+
+get {
+  url: {{AUTHSERVICE_HOST}}:{{AUTHSERVICE_PORT}}/api/v1/auth/list-service-clients?page=1&pageSize=10
+  body: json
+  auth: none
+}
+
+params:query {
+  page: 1
+  pageSize: 10
+}
+
+headers {
+  Authorization: Bearer {{access_token}}
+}
+
+body:json {
+  {
+    "clientId": "{{service_client_id}}"
+  }
+}

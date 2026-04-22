@@ -1,0 +1,11 @@
+meta {
+  name: Public Keys [*]
+  type: http
+  seq: 7
+}
+
+get {
+  url: {{AUTHSERVICE_HOST}}:{{AUTHSERVICE_PORT}}/api/v1/auth/public-keys
+  body: none
+  auth: inherit
+}

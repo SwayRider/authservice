@@ -1,0 +1,34 @@
+meta {
+  name: Get Token
+  type: http
+  seq: 5
+}
+
+post {
+  url: {{AUTHSERVICE_HOST}}:{{AUTHSERVICE_PORT}}/api/v1/auth/token
+  body: json
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{access_token}}
+}
+
+body:json {
+  {
+    "clientId": "{{service_client_id}}",
+    "clientSecret": "{{service_client_secret}}",
+    "scopes": ["*"]
+  }
+}
+
+script:post-response {
+  if (res.status == 200) {
+    if (res.body.clientId !== undefined) {
+      bru.setEnvVar("service_client_id", res.body.clientId);
+    }
+    if (res.body.clientSecret !== undefined) {
+      bru.setEnvVar("service_client_secret", res.body.clientSecret);
+    }
+  }
+}

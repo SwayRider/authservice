@@ -1,0 +1,18 @@
+meta {
+  name: Login User [*]
+  type: http
+  seq: 5
+}
+
+post {
+  url: {{AUTHSERVICE_HOST}}:{{AUTHSERVICE_PORT}}/api/v1/auth/login
+  body: json
+  auth: inherit
+}
+
+body:json {
+  {
+    "email": "maarten.heremans@gmail.com",
+    "password": "Swayrider7-Motorcyle3-Routes4"
+  }
+}

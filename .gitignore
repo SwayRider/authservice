@@ -1,0 +1,4 @@
+# Sensitive files
+dbconfig.yml
+
+.env

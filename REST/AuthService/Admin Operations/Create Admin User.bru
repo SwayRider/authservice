@@ -1,0 +1,22 @@
+meta {
+  name: Create Admin User
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{AUTHSERVICE_HOST}}:{{AUTHSERVICE_PORT}}/api/v1/auth/create-admin
+  body: json
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{access_token}}
+}
+
+body:json {
+  {
+    "email": "maarten.heremans@gmail.com",
+    "password": "Test123"
+  }
+}

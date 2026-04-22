@@ -1,0 +1,19 @@
+meta {
+  name: Register User [*]
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{AUTHSERVICE_HOST}}:{{AUTHSERVICE_PORT}}/api/v1/auth/register
+  body: json
+  auth: inherit
+}
+
+body:json {
+  {
+    "email": "m.aarten.heremans@gmail.com",
+    "password": "Swayrider7-Motorcyle3-Routes4",
+    "verificationUrl": "https://auth.swayrider-dev.hevanto-it.com"
+  }
+}

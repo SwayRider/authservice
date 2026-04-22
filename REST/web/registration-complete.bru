@@ -1,0 +1,20 @@
+meta {
+  name: registration-complete
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{AUTHSERVICE_HOST}}:{{AUTHSERVICE_WEB_PORT}}/web/registration-complete
+  body: none
+  auth: inherit
+}
+
+headers {
+  Authorization: Bearer {{access_token}}
+}
+
+settings {
+  encodeUrl: true
+  timeout: 0
+}
