@@ -37,6 +37,11 @@ The authservice exposes three server interfaces:
 | gRPC | 8081 | Internal service-to-service communication |
 | Web | 8000 | Static verification / reset pages |
 
+### Token Delivery
+
+Refresh tokens are delivered as **HTTP-only cookies** by the REST gateway (`CookieForwarder`).  
+When the `remember-me` header is set to `"true"`, the cookie lifetime is extended.
+
 ### Dependencies
 
 - **PostgreSQL**  
@@ -48,16 +53,48 @@ The authservice exposes three server interfaces:
 
 | Routine | Interval | Purpose |
 |------|----------|--------|
-| JWT Key Checker | Hourly | Ensure keys exist and rotate safely |
-| DB Maintenance | Hourly | Cleanup expired tokens & housekeeping |
+| JWT Key Checker | Hourly | Rotates JWT signing keys 3 days before expiration; uses a PostgreSQL advisory lock to prevent duplicate rotation across instances |
+| DB Maintenance | Hourly | Removes expired refresh tokens, verification tokens, and password reset tokens; uses a PostgreSQL advisory lock to prevent concurrent cleanup across instances |
 
 All background tasks are **idempotent** and safe to restart.
 
 ---
 
+## API Endpoints
+
+All methods are exposed over gRPC (port 8081) and REST/HTTP (port 8080) via grpc-gateway.  
+Every endpoint must be explicitly registered with a security level in `internal/server/server.go`.
+
+| Method | Security Level | Notes |
+|--------|---------------|-------|
+| `Register` | Public | |
+| `Login` | Public | |
+| `Logout` | Public | |
+| `Refresh` | Public | |
+| `PublicKeys` | Public | Returns all currently valid JWT verification keys |
+| `RequestPasswordReset` | Public | |
+| `ResetPassword` | Public | |
+| `CheckPasswordStrength` | Public | |
+| `CheckVerificationToken` | Public | |
+| `VerifyEmail` | Public | |
+| `GetToken` | Public | Service client credentials flow |
+| `WhoAmI` | Unverified | Requires authentication; works before email verification |
+| `ChangePassword` | Unverified | Requires authentication |
+| `CreateVerificationToken` | Unverified | Denied for already-verified users |
+| `ChangeAccountType` | Admin | |
+| `CreateAdmin` | Admin | |
+| `CreateServiceClient` | Admin | |
+| `DeleteServiceClient` | Admin | |
+| `ListServiceClients` | Admin | |
+| `WhoIs` | Admin or ServiceClient | ServiceClient requires `user:read` scope |
+| `Check` / `Ping` | Public | Health checks |
+
+---
+
 ## Configuration
 
-Configuration is provided via **environment variables** or **CLI flags**.
+Configuration is provided via **environment variables** or **CLI flags**.  
+Requires **Go 1.26.2** or later.
 
 ### Server Configuration
 
@@ -70,37 +107,39 @@ Configuration is provided via **environment variables** or **CLI flags**.
 
 ### Database Configuration
 
-| Env | Flag | Description |
-|----|------|------------|
-| `DB_HOST` | `-db-host` | Database host |
-| `DB_PORT` | `-db-port` | Database port |
-| `DB_NAME` | `-db-name` | Database name |
-| `DB_USER` | `-db-user` | Database user |
-| `DB_PASSWORD` | `-db-password` | **Required** |
-| `DB_SSL_MODE` | `-db-ssl-mode` | `disable` |
+| Env | Flag | Default | Description |
+|----|------|--------|-------------|
+| `DB_HOST` | `-db-host` | | Database host |
+| `DB_PORT` | `-db-port` | | Database port |
+| `DB_NAME` | `-db-name` | | Database name |
+| `DB_USER` | `-db-user` | | Database user |
+| `DB_PASSWORD` | `-db-password` | | **Required** |
+| `DB_SSL_MODE` | `-db-ssl-mode` | `disable` | |
 
 ### Service Configuration
 
-| Env | Flag | Description |
-|----|------|------------|
-| `ADMIN_EMAIL` | `-admin-email` | Initial admin user |
-| `ADMIN_PASSWORD` | `-admin-password` | Initial admin password |
-| `MAILSERVICE_HOST` | `-mailservice-host` | Mail service host |
-| `MAILSERVICE_PORT` | `-mailservice-port` | Mail service port |
-| `MAILER_ADDRESS` | `-mailer-address` | Outgoing email sender |
+| Env | Flag | Default | Description |
+|----|------|--------|------------|
+| `ADMIN_EMAIL` | `-admin-email` | | Initial admin user |
+| `ADMIN_PASSWORD` | `-admin-password` | | Initial admin password |
+| `MAILSERVICE_HOST` | `-mailservice-host` | | Mail service host |
+| `MAILSERVICE_PORT` | `-mailservice-port` | | Mail service port |
+| `MAILER_ADDRESS` | `-mailer-address` | `swayrider@example.com` | Outgoing email sender |
 
 ---
 
 ## Database Schema (Overview)
 
-| Table | Purpose |
-|-----|--------|
-| `users` | User accounts & metadata |
-| `jwt_keys` | RSA signing keys (rotated) |
-| `refresh_tokens` | Single-use refresh tokens |
-| `verification_tokens` | Email verification |
-| `reset_password_tokens` | Password reset |
-| `service_clients` | Service credentials |
+| Table | Purpose | Notable Columns |
+|-----|--------|----------------|
+| `users` | User accounts & metadata | `account_level` (default `free`), `is_verified`, `is_admin`, `provider`, `provider_id` |
+| `jwt_keys` | RSA signing keys (rotated) | `valid_until`, `private_key`, `public_key` |
+| `refresh_tokens` | Single-use refresh tokens | `revoked`, `valid_until`, `jwtid`, `created_ip`, `user_agent` |
+| `verification_tokens` | Email verification | `token`, `valid_until` |
+| `reset_password_tokens` | Password reset | `token`, `valid_until` |
+| `service_clients` | Service credentials | `client_id`, `client_secret`, `scopes` (TEXT[]) |
+
+Service clients authenticate via the `GetToken` endpoint and are granted fine-grained access using the `scopes` array (e.g. `user:read`).
 
 ### Migrations
 
@@ -108,4 +147,4 @@ Configuration is provided via **environment variables** or **CLI flags**.
 cd backend/services/authservice
 make migrate-up
 make migrate-status
-
+```

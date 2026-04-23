@@ -63,7 +63,7 @@ Flags:
 
 	-admin-email
 	-admin-password
-	-mailer-address			(default: swayrider@hevanto-it.com)
+	-mailer-address			(default: swayrider@example.com)
 
 	-mailservice-host
 	-mailservice-port
@@ -100,7 +100,7 @@ const (
 
 	DefAdminEmail    = ""
 	DefAdminPassword = ""
-	DefMailerAddress = "swayrider@hevanto-it.com"
+	DefMailerAddress = "swayrider@example.com"
 )
 
 func main() {
