@@ -50,6 +50,7 @@ container-build:
 	@echo "Building $(IMAGE):$(BASE_TAG)$(if $(FLOATING_TAG), [+$(FLOATING_TAG)])"
 	docker buildx build \
 		-f Dockerfile \
+		--network=host \
 		--platform linux/amd64,linux/arm64 \
 		$(TAGS) \
 		--push .
