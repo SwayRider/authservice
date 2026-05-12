@@ -15,6 +15,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 
 	log "github.com/swayrider/swlib/logger"
@@ -97,6 +98,52 @@ func (d *DB) checkConnection() error {
 	if err := d.Ping(); err != nil {
 		return d.newConnection()
 	}
+	return nil
+}
+
+// EnsureDatabase creates the target database if it does not already exist.
+// It connects to the PostgreSQL server via the "postgres" maintenance database,
+// then creates the configured database if absent.
+func EnsureDatabase(cfg Config, l *log.Logger) error {
+	lg := l.Derive(
+		log.WithComponent("postgres"),
+		log.WithFunction("EnsureDatabase"),
+	)
+
+	sslmode := cfg.SSLMode
+	if sslmode == "" {
+		sslmode = "disable"
+	}
+
+	dsn := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=postgres sslmode=%s",
+		cfg.Host, cfg.Port, cfg.User, cfg.Password, sslmode)
+
+	conn, err := sql.Open("postgres", dsn)
+	if err != nil {
+		return fmt.Errorf("failed to open postgres connection: %w", err)
+	}
+	defer conn.Close()
+
+	if err := conn.Ping(); err != nil {
+		return fmt.Errorf("failed to ping postgres: %w", err)
+	}
+
+	var exists bool
+	if err := conn.QueryRow(
+		"SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = $1)", cfg.DBName,
+	).Scan(&exists); err != nil {
+		return fmt.Errorf("failed to check database existence: %w", err)
+	}
+
+	if !exists {
+		lg.Infof("creating database %q", cfg.DBName)
+		// CREATE DATABASE cannot run inside a transaction.
+		ident := `"` + strings.ReplaceAll(cfg.DBName, `"`, `""`) + `"`
+		if _, err := conn.Exec("CREATE DATABASE " + ident); err != nil {
+			return fmt.Errorf("failed to create database %q: %w", cfg.DBName, err)
+		}
+	}
+
 	return nil
 }
 
