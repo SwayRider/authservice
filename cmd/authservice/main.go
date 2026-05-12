@@ -41,6 +41,7 @@ import (
 	"github.com/swayrider/authservice/internal/db"
 	"github.com/swayrider/authservice/internal/server"
 	"github.com/swayrider/authservice/internal/web"
+	"github.com/swayrider/authservice/migrations"
 	log "github.com/swayrider/swlib/logger"
 
 	"github.com/swayrider/swlib/app"
@@ -190,11 +191,16 @@ func dbCtor(a app.App) app.DB {
 }
 
 // dbBootstrap initializes required database state on startup.
-// This includes creating the initial admin user and ensuring JWT keys exist.
+// This includes running pending migrations, creating the initial admin user,
+// and ensuring JWT keys exist.
 func dbBootstrap(a app.App) error {
 	lg := a.Logger().Derive(log.WithFunction("dbBootstrap"))
 	dbconn := a.Database().(*db.DB)
 	cfg := a.Config()
+
+	if err := dbconn.Migrate(migrations.FS); err != nil {
+		lg.Fatalf("failed to run database migrations: %v", err)
+	}
 
 	bootstrapAdmin(cfg, dbconn, lg)
 	bootstrapKeys(dbconn, lg)
