@@ -180,6 +180,10 @@ func dbCtor(a app.App) app.DB {
 		SSLMode:  app.GetConfigField[string](a.Config(), app.KeyDBSSLMode),
 	}
 
+	if err := db.EnsureDatabase(cfg, a.Logger()); err != nil {
+		lg.Fatalf("failed to ensure database exists: %v", err)
+	}
+
 	conn, err := db.New(
 		cfg,
 		a.Logger())
