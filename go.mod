@@ -7,9 +7,9 @@ require (
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.29.0
 	github.com/lib/pq v1.12.3
 	github.com/rubenv/sql-migrate v1.8.1
-	github.com/swayrider/grpcclients v0.1.2
+	github.com/swayrider/grpcclients v0.1.3
 	github.com/swayrider/protos v0.1.1
-	github.com/swayrider/swlib v0.1.2
+	github.com/swayrider/swlib v0.1.3
 	github.com/wagslane/go-password-validator v0.3.0
 	google.golang.org/grpc v1.80.0
 	google.golang.org/protobuf v1.36.11
@@ -36,7 +36,7 @@ require (
 	github.com/mitchellh/go-homedir v1.1.0 // indirect
 	github.com/mitchellh/mapstructure v1.5.0 // indirect
 	github.com/rs/cors v1.11.1 // indirect
-	github.com/stretchr/testify v1.11.1 // indirect
+	github.com/stretchr/objx v0.5.2 // indirect
 	golang.org/x/crypto v0.47.0 // indirect
 	golang.org/x/exp v0.0.0-20250305212735-054e65f0b394 // indirect
 	golang.org/x/net v0.49.0 // indirect
