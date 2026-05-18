@@ -196,12 +196,16 @@ github.com/swayrider/grpcclients v0.1.1 h1:2daCng6gPClEwOwKNVqEI2SKozOV5hZf1FsSr
 github.com/swayrider/grpcclients v0.1.1/go.mod h1:BGZGu7XPZFu9vz3J1MbyUrkVGNUHgr9q2/KXMd9s8SU=
 github.com/swayrider/grpcclients v0.1.2-0.20260513193630-fb9b503de3d0 h1:FfVJwiA+4cXWLp/9ozHGe77C6ZWdHLNCOCxzdsbpEt8=
 github.com/swayrider/grpcclients v0.1.2-0.20260513193630-fb9b503de3d0/go.mod h1:BGZGu7XPZFu9vz3J1MbyUrkVGNUHgr9q2/KXMd9s8SU=
+github.com/swayrider/grpcclients v0.1.2 h1:NQWVDKUCM0NlkP2P7aokhmMrEhB4u0oMk7z8/UAoPFI=
+github.com/swayrider/grpcclients v0.1.2/go.mod h1:BGZGu7XPZFu9vz3J1MbyUrkVGNUHgr9q2/KXMd9s8SU=
 github.com/swayrider/protos v0.1.1 h1:8FOYwavGfaon1ylw07DeMgttU+ZitoN6nK4hCZO/7FI=
 github.com/swayrider/protos v0.1.1/go.mod h1:e5VCOSgkeRKptyLYV0l351sdHpuzhnpN81UZT8LOXRg=
 github.com/swayrider/swlib v0.1.1 h1:1PTJTHMonoX/AC9gvkzHG+VdYt6gEt/MpDC2F514dw4=
 github.com/swayrider/swlib v0.1.1/go.mod h1:5PWYUKOJxXenwyZJMd5pfKwJa/U092Oc3SDj+yyIFTk=
 github.com/swayrider/swlib v0.1.2-0.20260513190938-e9124987785d h1:TPqQ9RN7mNHdwrFfFxte4urbW8cO6DF1Ot3SNQrgyx8=
 github.com/swayrider/swlib v0.1.2-0.20260513190938-e9124987785d/go.mod h1:mSScpgfHXCO2K+NTCxRHA+ZPsrEJF4FGRUVU1WPLKn8=
+github.com/swayrider/swlib v0.1.2 h1:XPexKJT+dI+Tt92DZ6lFMFMqKW2G3o8zcOJelEVox7E=
+github.com/swayrider/swlib v0.1.2/go.mod h1:mSScpgfHXCO2K+NTCxRHA+ZPsrEJF4FGRUVU1WPLKn8=
 github.com/tv42/httpunix v0.0.0-20150427012821-b75d8614f926/go.mod h1:9ESjWnEqriFuLhtthL60Sar/7RFoluCcXsuvEwTV5KM=
 github.com/wagslane/go-password-validator v0.3.0 h1:vfxOPzGHkz5S146HDpavl0cw1DSVP061Ry2PX0/ON6I=
 github.com/wagslane/go-password-validator v0.3.0/go.mod h1:TI1XJ6T5fRdRnHqHt14pvy1tNVnrwe7m3/f1f2fDphQ=
