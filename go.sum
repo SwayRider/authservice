@@ -133,6 +133,7 @@ github.com/mattn/go-isatty v0.0.16/go.mod h1:kYGgaQfpe5nmfYZH+SKPsOc2e4SrIfOl2e/
 github.com/mattn/go-isatty v0.0.20 h1:xfD0iDuEKnDkl03q4limB+vH+GxLEtL/jb4xVJSWWEY=
 github.com/mattn/go-isatty v0.0.20/go.mod h1:W+V8PltTTMOvKvAeJH7IuucS94S2C6jfK/D7dTCTo3Y=
 github.com/mattn/go-sqlite3 v1.14.42 h1:MigqEP4ZmHw3aIdIT7T+9TLa90Z6smwcthx+Azv4Cgo=
+github.com/mattn/go-sqlite3 v1.14.42/go.mod h1:pjEuOr8IwzLJP2MfGeTb0A35jauH+C2kbHKBr7yXKVQ=
 github.com/matttproud/golang_protobuf_extensions v1.0.1/go.mod h1:D8He9yQNgCq6Z5Ld7szi9bcBfOoFv/3dc6xSMkL2PC0=
 github.com/miekg/dns v1.1.26/go.mod h1:bPDLeHnStXmXAq1m/Ch/hvfNHr14JKNPMBo3VZKjuso=
 github.com/miekg/dns v1.1.41 h1:WMszZWJG0XmzbK9FEmzH2TVcqYzFesusSIB41b8KHxY=
@@ -190,12 +191,17 @@ github.com/stretchr/testify v1.3.0/go.mod h1:M5WIy9Dh21IEIfnGCwXGc5bZfKNJtfHm1UV
 github.com/stretchr/testify v1.4.0/go.mod h1:j7eGeouHqKxXV5pUuKE4zz7dFj8WfuZ+81PSLYec5m4=
 github.com/stretchr/testify v1.7.2/go.mod h1:R6va5+xMeoiuVRoj+gSkQ7d3FALtqAAGI1FQKckRals=
 github.com/stretchr/testify v1.11.1 h1:7s2iGBzp5EwR7/aIZr8ao5+dra3wiQyKjjFuvgVKu7U=
+github.com/stretchr/testify v1.11.1/go.mod h1:wZwfW3scLgRK+23gO65QZefKpKQRnfz6sD981Nm4B6U=
 github.com/swayrider/grpcclients v0.1.1 h1:2daCng6gPClEwOwKNVqEI2SKozOV5hZf1FsSrAmYRus=
 github.com/swayrider/grpcclients v0.1.1/go.mod h1:BGZGu7XPZFu9vz3J1MbyUrkVGNUHgr9q2/KXMd9s8SU=
+github.com/swayrider/grpcclients v0.1.2-0.20260513193630-fb9b503de3d0 h1:FfVJwiA+4cXWLp/9ozHGe77C6ZWdHLNCOCxzdsbpEt8=
+github.com/swayrider/grpcclients v0.1.2-0.20260513193630-fb9b503de3d0/go.mod h1:BGZGu7XPZFu9vz3J1MbyUrkVGNUHgr9q2/KXMd9s8SU=
 github.com/swayrider/protos v0.1.1 h1:8FOYwavGfaon1ylw07DeMgttU+ZitoN6nK4hCZO/7FI=
 github.com/swayrider/protos v0.1.1/go.mod h1:e5VCOSgkeRKptyLYV0l351sdHpuzhnpN81UZT8LOXRg=
 github.com/swayrider/swlib v0.1.1 h1:1PTJTHMonoX/AC9gvkzHG+VdYt6gEt/MpDC2F514dw4=
 github.com/swayrider/swlib v0.1.1/go.mod h1:5PWYUKOJxXenwyZJMd5pfKwJa/U092Oc3SDj+yyIFTk=
+github.com/swayrider/swlib v0.1.2-0.20260513190938-e9124987785d h1:TPqQ9RN7mNHdwrFfFxte4urbW8cO6DF1Ot3SNQrgyx8=
+github.com/swayrider/swlib v0.1.2-0.20260513190938-e9124987785d/go.mod h1:mSScpgfHXCO2K+NTCxRHA+ZPsrEJF4FGRUVU1WPLKn8=
 github.com/tv42/httpunix v0.0.0-20150427012821-b75d8614f926/go.mod h1:9ESjWnEqriFuLhtthL60Sar/7RFoluCcXsuvEwTV5KM=
 github.com/wagslane/go-password-validator v0.3.0 h1:vfxOPzGHkz5S146HDpavl0cw1DSVP061Ry2PX0/ON6I=
 github.com/wagslane/go-password-validator v0.3.0/go.mod h1:TI1XJ6T5fRdRnHqHt14pvy1tNVnrwe7m3/f1f2fDphQ=
