@@ -76,8 +76,17 @@ func init() {
 	// Refresh - Public: exchange refresh token for new token pair
 	security.PublicEndpoint("/auth.v1.AuthService/Refresh")
 
+	// InviteUser - Admin only: add email to registration invite list
+	security.AdminEndpoint("/auth.v1.AuthService/InviteUser")
+
+	// ListInvites - Admin only: list pending registration invites
+	security.AdminEndpoint("/auth.v1.AuthService/ListInvites")
+
 	// Register - Public: create new user account
 	security.PublicEndpoint("/auth.v1.AuthService/Register")
+
+	// RevokeInvite - Admin only: remove email from registration invite list
+	security.AdminEndpoint("/auth.v1.AuthService/RevokeInvite")
 
 	// RequestPasswordReset - Public: initiate password reset flow
 	security.PublicEndpoint("/auth.v1.AuthService/RequestPasswordReset")
@@ -107,15 +116,22 @@ func init() {
 	security.PublicEndpoint("/health.v1.HealthService/Ping")
 }
 
+// registrationModeInviteOnly is the REGISTRATION_MODE value that restricts
+// registration to pre-approved email addresses only. Admins add addresses via
+// InviteUser; each invite is consumed after a successful registration.
+const registrationModeInviteOnly = "invite_only"
+
 // AuthServer implements the AuthService gRPC interface.
 // It handles all authentication operations including user login, registration,
 // token management, and service client authentication.
 type AuthServer struct {
 	authv1.UnimplementedAuthServiceServer
-	dbConn        *db.DB             // Database connection for user/token storage
-	mailClient    *mailclient.Client // Client for sending verification/reset emails
-	mailerAddress string             // From address for outgoing emails
-	l             *log.Logger        // Logger instance
+	dbConn           *db.DB             // Database connection for user/token storage
+	mailClient       *mailclient.Client // Client for sending verification/reset emails
+	mailerAddress    string             // From address for outgoing emails
+	registrationMode string             // "open" (default) or "invite_only"
+	registrationUrl  string             // Registration page URL sent in invite emails (REGISTRATION_URL)
+	l                *log.Logger        // Logger instance
 }
 
 // HealthServer implements the HealthService gRPC interface.
@@ -130,11 +146,15 @@ func NewAuthServer(
 	conn *db.DB, lgr *log.Logger,
 	mailClient *mailclient.Client,
 	mailerAddress string,
+	registrationMode string,
+	registrationUrl string,
 ) *AuthServer {
 	return &AuthServer{
-		dbConn:        conn,
-		mailClient:    mailClient,
-		mailerAddress: mailerAddress,
+		dbConn:           conn,
+		mailClient:       mailClient,
+		mailerAddress:    mailerAddress,
+		registrationMode: registrationMode,
+		registrationUrl:  registrationUrl,
 		l: lgr.Derive(
 			log.WithComponent("AuthServer"),
 			log.WithFunction("NewAuthServer"),
