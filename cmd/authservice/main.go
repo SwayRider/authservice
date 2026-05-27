@@ -29,8 +29,9 @@ package main
 
 import (
 	"context"
-	"time"
 	"fmt"
+	"strings"
+	"time"
 
 	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	"google.golang.org/grpc"
@@ -387,15 +388,31 @@ func grpcHealthGateway(a app.App) app.ServiceHTTPHandler {
 }
 
 // startWebServer starts the static web server for serving HTML pages.
-// This is used for email verification completion pages.
+// This is used for email verification completion pages and the registration form.
 func startWebServer(a app.App) error {
 	lg := a.Logger().Derive(log.WithFunction("startWebServer"))
 	port := app.GetConfigField[int](a.Config(), app.KeyWebPort)
 	prefix := app.GetConfigField[string](a.Config(), app.KeyWebPathPrefix)
+	mailClient := app.GetServiceClient[*mailclient.Client](a, "mailservice")
+	mailerAddress := app.GetConfigField[string](a.Config(), FldMailerAddress)
+	registrationMode := app.GetConfigField[string](a.Config(), FldRegistrationMode)
+
+	// Derive the verify-user URL from web port and path prefix.
+	// In production, override REGISTRATION_URL to match the external hostname.
+	trimmedPrefix := strings.TrimRight(prefix, "/")
+	verifyUserUrl := fmt.Sprintf("http://localhost:%d%s/verify-user", port, trimmedPrefix)
+
+	regCfg := &web.RegisterConfig{
+		MailClient:       mailClient,
+		MailerAddress:    mailerAddress,
+		RegistrationMode: registrationMode,
+		VerifyUserUrl:    verifyUserUrl,
+	}
+
 	ws := web.New(
 		fmt.Sprintf("0.0.0.0:%d", port),
 		prefix, a.Database().(*db.DB),
-		a.Logger())
+		a.Logger(), regCfg)
 	if err := ws.Start(); err != nil {
 		lg.Errorf("failed to start web server: %v", err)
 		return err
