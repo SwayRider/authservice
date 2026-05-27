@@ -110,7 +110,10 @@ func register(
 				return
 			}
 			if !invited {
-				renderForm("register_not_invited")
+				if err := templates.ExecuteTemplate(w, "register-not-invited.html", data); err != nil {
+					lg.Errorf("failed to execute template: %v", err)
+					w.WriteHeader(http.StatusInternalServerError)
+				}
 				return
 			}
 		}
