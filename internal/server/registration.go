@@ -29,12 +29,18 @@ import (
 // Register creates a new user account with the provided email and password.
 //
 // The registration flow:
-//  1. Validate password meets minimum entropy requirements
-//  2. Hash password using Argon2id
-//  3. Create user record in database
-//  4. Asynchronously send verification email
+//  1. In INVITE_ONLY mode: verify email is in the invite list (PermissionDenied if not)
+//  2. Validate password meets minimum entropy requirements
+//  3. Hash password using Argon2id
+//  4. Create user record in database
+//  5. In INVITE_ONLY mode: consume (delete) the invite
+//  6. Asynchronously send verification email
+//
+// The verification URL in the request is provided by the caller (mobile app, web app)
+// since different clients have different verification page URLs.
 //
 // Returns:
+//   - codes.PermissionDenied: In INVITE_ONLY mode when email has no pending invite
 //   - codes.InvalidArgument: If password is too weak
 //   - codes.AlreadyExists: If email is already registered
 func (s *AuthServer) Register(
@@ -42,6 +48,17 @@ func (s *AuthServer) Register(
 	req *authv1.RegisterRequest,
 ) (*authv1.RegisterResponse, error) {
 	lg := s.Logger().Derive(log.WithFunction("Register"))
+
+	if s.registrationMode == registrationModeInviteOnly {
+		invited, err := s.DB().IsEmailInvited(ctx, req.Email)
+		if err != nil {
+			lg.Errorf("failed to check invite for %s: %v", req.Email, err)
+			return nil, status.Errorf(codes.Internal, "registration error")
+		}
+		if !invited {
+			return nil, status.Errorf(codes.PermissionDenied, "invitation required")
+		}
+	}
 
 	err := passwordvalidator.Validate(req.Password, crypto.PasswordMinEntropy)
 	if err != nil {
@@ -70,6 +87,12 @@ func (s *AuthServer) Register(
 			"registration error for user with email: %s", req.Email)
 	}
 	lg.Debugf("user resigered with ID: %s", userid)
+
+	if s.registrationMode == registrationModeInviteOnly {
+		if err := s.DB().ConsumeInvite(ctx, req.Email); err != nil {
+			lg.Errorf("failed to consume invite for %s: %v", req.Email, err)
+		}
+	}
 
 	go s.sendVerificationEmail(userid, "", req.VerificationUrl)
 

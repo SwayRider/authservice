@@ -29,8 +29,9 @@ package main
 
 import (
 	"context"
-	"time"
 	"fmt"
+	"strings"
+	"time"
 
 	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	"google.golang.org/grpc"
@@ -86,6 +87,9 @@ Environment variables:
 	ADMIN_PASSWORD
 	MAILER_ADDRESS
 
+	REGISTRATION_MODE
+	REGISTRATION_URL
+
 	MAILSERVICE_HOST
 	MAILSERVICE_PORT
 */
@@ -102,6 +106,15 @@ const (
 	DefAdminEmail    = ""
 	DefAdminPassword = ""
 	DefMailerAddress = "swayrider@example.com"
+
+	FldRegistrationMode = "registration-mode"
+	FldRegistrationUrl  = "registration-url"
+
+	EnvRegistrationMode = "REGISTRATION_MODE"
+	EnvRegistrationUrl  = "REGISTRATION_URL"
+
+	DefRegistrationMode = "open"
+	DefRegistrationUrl  = ""
 )
 
 func main() {
@@ -125,6 +138,12 @@ func main() {
 			app.NewStringConfigField(
 				FldMailerAddress, EnvMailerAddress,
 				"Address used to send emails from", DefMailerAddress),
+			app.NewStringConfigField(
+				FldRegistrationMode, EnvRegistrationMode,
+				"Registration mode (open or invite_only)", DefRegistrationMode),
+			app.NewStringConfigField(
+				FldRegistrationUrl, EnvRegistrationUrl,
+				"URL of the registration page (used in invite emails)", DefRegistrationUrl),
 		).
 		WithDatabase(dbCtor, dbBootstrap).
 		WithBackgroundRoutines(
@@ -305,13 +324,23 @@ func dbMaintenance(a app.App) {
 
 // grpcAuthRegistrar registers the AuthService gRPC server with the registrar.
 func grpcAuthRegistrar(r grpc.ServiceRegistrar, a app.App) {
+	lg := a.Logger().Derive(log.WithFunction("grpcAuthRegistrar"))
 	mailClient := app.GetServiceClient[*mailclient.Client](a, "mailservice")
 	mailerAddress := app.GetConfigField[string](a.Config(), FldMailerAddress)
+	registrationMode := app.GetConfigField[string](a.Config(), FldRegistrationMode)
+	registrationUrl := app.GetConfigField[string](a.Config(), FldRegistrationUrl)
+
+	if registrationMode != "open" && registrationMode != "invite_only" {
+		lg.Fatalf("invalid REGISTRATION_MODE %q (must be 'open' or 'invite_only')", registrationMode)
+	}
+
 	srv := server.NewAuthServer(
 		a.Database().(*db.DB),
 		a.Logger(),
 		mailClient,
 		mailerAddress,
+		registrationMode,
+		registrationUrl,
 	)
 	authv1.RegisterAuthServiceServer(r, srv)
 }
@@ -359,15 +388,31 @@ func grpcHealthGateway(a app.App) app.ServiceHTTPHandler {
 }
 
 // startWebServer starts the static web server for serving HTML pages.
-// This is used for email verification completion pages.
+// This is used for email verification completion pages and the registration form.
 func startWebServer(a app.App) error {
 	lg := a.Logger().Derive(log.WithFunction("startWebServer"))
 	port := app.GetConfigField[int](a.Config(), app.KeyWebPort)
 	prefix := app.GetConfigField[string](a.Config(), app.KeyWebPathPrefix)
+	mailClient := app.GetServiceClient[*mailclient.Client](a, "mailservice")
+	mailerAddress := app.GetConfigField[string](a.Config(), FldMailerAddress)
+	registrationMode := app.GetConfigField[string](a.Config(), FldRegistrationMode)
+
+	// Derive the verify-user URL from web port and path prefix.
+	// In production, override REGISTRATION_URL to match the external hostname.
+	trimmedPrefix := strings.TrimRight(prefix, "/")
+	verifyUserUrl := fmt.Sprintf("http://localhost:%d%s/verify-user", port, trimmedPrefix)
+
+	regCfg := &web.RegisterConfig{
+		MailClient:       mailClient,
+		MailerAddress:    mailerAddress,
+		RegistrationMode: registrationMode,
+		VerifyUserUrl:    verifyUserUrl,
+	}
+
 	ws := web.New(
 		fmt.Sprintf("0.0.0.0:%d", port),
 		prefix, a.Database().(*db.DB),
-		a.Logger())
+		a.Logger(), regCfg)
 	if err := ws.Start(); err != nil {
 		lg.Errorf("failed to start web server: %v", err)
 		return err

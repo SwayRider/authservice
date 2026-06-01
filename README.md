@@ -86,6 +86,9 @@ Every endpoint must be explicitly registered with a security level in `internal/
 | `CreateServiceClient` | Admin | |
 | `DeleteServiceClient` | Admin | |
 | `ListServiceClients` | Admin | |
+| `InviteUser` | Admin | Add email to invite list; sends invite email |
+| `RevokeInvite` | Admin | Remove email from invite list |
+| `ListInvites` | Admin | List pending invites (paginated) |
 | `WhoIs` | Admin or ServiceClient | ServiceClient requires `user:read` scope |
 | `Check` / `Ping` | Public | Health checks |
 
@@ -125,6 +128,8 @@ Requires **Go 1.26.2** or later.
 | `MAILSERVICE_HOST` | `-mailservice-host` | | Mail service host |
 | `MAILSERVICE_PORT` | `-mailservice-port` | | Mail service port |
 | `MAILER_ADDRESS` | `-mailer-address` | `swayrider@example.com` | Outgoing email sender |
+| `REGISTRATION_MODE` | `-registration-mode` | `open` | Registration mode: `open` or `invite_only` |
+| `REGISTRATION_URL` | `-registration-url` | | Registration page URL — included in invite emails; required when `REGISTRATION_MODE=invite_only` |
 
 ---
 
@@ -138,6 +143,7 @@ Requires **Go 1.26.2** or later.
 | `verification_tokens` | Email verification | `token`, `valid_until` |
 | `reset_password_tokens` | Password reset | `token`, `valid_until` |
 | `service_clients` | Service credentials | `client_id`, `client_secret`, `scopes` (TEXT[]) |
+| `registration_invites` | Pre-approved emails for invite-only mode | `email` (unique), `created_at` |
 
 Service clients authenticate via the `GetToken` endpoint and are granted fine-grained access using the `scopes` array (e.g. `user:read`).
 
@@ -148,6 +154,48 @@ cd backend/services/authservice
 make migrate-up
 make migrate-status
 ```
+
+---
+
+## Registration Modes
+
+The `REGISTRATION_MODE` environment variable controls who can create new accounts.
+
+### `open` (default)
+
+Anyone can call `Register` and create an account. No restrictions.
+
+### `invite_only`
+
+An admin must pre-approve each email address before the owner can register.
+
+**Flow:**
+
+1. Admin calls `InviteUser` (via swctl or the admin API endpoint). The service creates an invite record and immediately sends an invitation email to that address containing the registration page URL (`REGISTRATION_URL`).
+2. The invitee navigates to the registration page and calls `Register` with their email and a chosen password.
+3. The service checks that the email has a pending invite. If not, it returns `PermissionDenied`.
+4. On successful registration the invite is consumed (deleted), so each invite can only be used once.
+
+**Managing invites via swctl:**
+
+```bash
+# Add an invite
+swctl auth invite-user --auth-host … --user admin@… --password … user@example.com
+
+# Remove an invite
+swctl auth revoke-invite --auth-host … --user admin@… --password … user@example.com
+
+# List pending invites
+swctl auth list-invites --auth-host … --user admin@… --password …
+```
+
+**Notes:**
+
+- The invite email is sent asynchronously; `InviteUser` returns immediately.
+- If an email already has a pending invite, `InviteUser` returns `AlreadyExists`.
+- Revoking a non-existent invite is a no-op (no error returned).
+- The verification URL in registration emails is **not** affected by this setting — it is always provided by the calling client (mobile app / web app) in the `Register` request.
+- `REGISTRATION_URL` is only used for invite emails. It can be left empty if `REGISTRATION_MODE=open`.
 
 ---
 

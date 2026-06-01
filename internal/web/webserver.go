@@ -32,6 +32,7 @@ func init() {
 
 	security.PublicEndpoint("/web/verify-user")
 	security.PublicEndpoint("/web/reset-password")
+	security.PublicEndpoint("/web/register")
 
 	security.UnverifiedEndpoint("/web/registration-complete")
 }
@@ -53,13 +54,16 @@ func (s WebServer) Server() *http.Server {
 // New creates a new WebServer with the configured routes.
 // Routes:
 //   - {prefix}/verify-user: Email verification endpoint
-//   - {prefix}/registration-complete: Post-registration success page
+//   - {prefix}/reset-password: Password reset form
+//   - {prefix}/register: User registration form (only if cfg != nil)
+//   - {prefix}/registration-complete: Post-verification success page
 //   - {prefix}/: Index page
 func New(
 	addr string,
 	prefix string,
 	dbConn *db.DB,
 	l *log.Logger,
+	cfg *RegisterConfig,
 ) *WebServer {
 	lg := l.Derive(
 		log.WithComponent("WebServer"),
@@ -85,6 +89,12 @@ func New(
 		fmt.Sprintf("%s%s", prefix, "reset-password"),
 		resetPassword(dbConn, templates, lg),
 	)
+	if cfg != nil {
+		mux.HandleFunc(
+			fmt.Sprintf("%s%s", prefix, "register"),
+			register(dbConn, templates, *cfg, lg),
+		)
+	}
 	mux.HandleFunc(
 		fmt.Sprintf("%s%s", prefix, "registration-complete"),
 		func(w http.ResponseWriter, r *http.Request) {

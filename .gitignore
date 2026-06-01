@@ -2,6 +2,7 @@
 dbconfig.yml
 
 .env
+local.env
 
 # REST collections moved to testing repo
 REST/
