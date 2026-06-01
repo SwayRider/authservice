@@ -23,6 +23,10 @@ import (
 
 // InviteUser adds an email address to the registration invite list and sends
 // an invitation email to that address.
+//
+// If an invite already exists for the email and the user has not yet registered,
+// AlreadyExists is returned. If the user has registered but their account was
+// subsequently deleted, the invite is reset so they can re-register.
 func (s *AuthServer) InviteUser(
 	ctx context.Context,
 	req *authv1.InviteUserRequest,
@@ -35,12 +39,38 @@ func (s *AuthServer) InviteUser(
 
 	_, err := s.DB().CreateInvite(ctx, req.Email)
 	if err != nil {
-		if errors.Is(err, db.ErrUniqueViolation) {
+		if !errors.Is(err, db.ErrUniqueViolation) {
+			lg.Errorf("failed to create invite for %s: %v", req.Email, err)
+			return nil, status.Errorf(codes.Internal, "failed to create invite")
+		}
+
+		// Invite already exists — check whether re-invitation is allowed.
+		inv, fetchErr := s.DB().GetInviteByEmail(ctx, req.Email)
+		if fetchErr != nil {
+			lg.Errorf("failed to fetch invite for %s: %v", req.Email, fetchErr)
+			return nil, status.Errorf(codes.Internal, "failed to create invite")
+		}
+		if !inv.Registered {
 			return nil, status.Errorf(
 				codes.AlreadyExists, "invite for %s already exists", req.Email)
 		}
-		lg.Errorf("failed to create invite for %s: %v", req.Email, err)
-		return nil, status.Errorf(codes.Internal, "failed to create invite")
+
+		// Invite was consumed — allow re-invitation only if the account is gone.
+		_, userErr := s.DB().GetUserByEmail(ctx, req.Email)
+		if userErr == nil {
+			return nil, status.Errorf(
+				codes.AlreadyExists, "user %s already has an active account", req.Email)
+		}
+		if !errors.Is(userErr, db.ErrUserNotFound) {
+			lg.Errorf("failed to look up user %s: %v", req.Email, userErr)
+			return nil, status.Errorf(codes.Internal, "failed to create invite")
+		}
+
+		// Account deleted — reset the invite so the user can re-register.
+		if resetErr := s.DB().ReInvite(ctx, req.Email); resetErr != nil {
+			lg.Errorf("failed to reset invite for %s: %v", req.Email, resetErr)
+			return nil, status.Errorf(codes.Internal, "failed to re-invite")
+		}
 	}
 
 	go s.sendInviteEmail(req.Email)
@@ -51,6 +81,7 @@ func (s *AuthServer) InviteUser(
 }
 
 // RevokeInvite removes an email address from the registration invite list.
+// Returns FailedPrecondition if the invitee has already registered.
 func (s *AuthServer) RevokeInvite(
 	ctx context.Context,
 	req *authv1.RevokeInviteRequest,
@@ -59,6 +90,23 @@ func (s *AuthServer) RevokeInvite(
 
 	if req.Email == "" {
 		return nil, status.Errorf(codes.InvalidArgument, "email is required")
+	}
+
+	inv, err := s.DB().GetInviteByEmail(ctx, req.Email)
+	if err != nil {
+		if errors.Is(err, db.ErrInviteNotFound) {
+			return &authv1.RevokeInviteResponse{
+				Message: fmt.Sprintf("No invite found for %s", req.Email),
+			}, nil
+		}
+		lg.Errorf("failed to fetch invite for %s: %v", req.Email, err)
+		return nil, status.Errorf(codes.Internal, "failed to revoke invite")
+	}
+
+	if inv.Registered {
+		return nil, status.Errorf(
+			codes.FailedPrecondition,
+			"cannot revoke invite for %s: user has already registered", req.Email)
 	}
 
 	if err := s.DB().DeleteInvite(ctx, req.Email); err != nil {
@@ -71,7 +119,8 @@ func (s *AuthServer) RevokeInvite(
 	}, nil
 }
 
-// ListInvites returns a paginated list of pending registration invites.
+// ListInvites returns a paginated list of registration invites.
+// When req.Registered is set, only invites matching that status are returned.
 func (s *AuthServer) ListInvites(
 	ctx context.Context,
 	req *authv1.ListInvitesRequest,
@@ -87,13 +136,13 @@ func (s *AuthServer) ListInvites(
 		pageSize = 0
 	}
 
-	count, err := s.DB().CountInvites(ctx)
+	count, err := s.DB().CountInvites(ctx, req.Registered)
 	if err != nil {
 		lg.Errorf("failed to count invites: %v", err)
 		return nil, status.Errorf(codes.Internal, "failed to list invites")
 	}
 
-	invites, err := s.DB().ListInvites(ctx, page, pageSize)
+	invites, err := s.DB().ListInvites(ctx, page, pageSize, req.Registered)
 	if err != nil {
 		lg.Errorf("failed to list invites: %v", err)
 		return nil, status.Errorf(codes.Internal, "failed to list invites")
@@ -101,10 +150,12 @@ func (s *AuthServer) ListInvites(
 
 	protoInvites := make([]*authv1.ListInvitesResponse_Invite, 0, len(invites))
 	for _, inv := range invites {
+		registered := inv.Registered
 		protoInvites = append(protoInvites, &authv1.ListInvitesResponse_Invite{
-			Id:        inv.ID,
-			Email:     inv.Email,
-			CreatedAt: timestamppb.New(inv.CreatedAt),
+			Id:         inv.ID,
+			Email:      inv.Email,
+			CreatedAt:  timestamppb.New(inv.CreatedAt),
+			Registered: &registered,
 		})
 	}
 

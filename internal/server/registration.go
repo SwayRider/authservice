@@ -94,7 +94,11 @@ func (s *AuthServer) Register(
 		}
 	}
 
-	go s.sendVerificationEmail(userid, "", req.VerificationUrl)
+	verificationUrl := req.VerificationUrl
+	if verificationUrl == "" {
+		verificationUrl = s.verificationUrl
+	}
+	go s.sendVerificationEmail(userid, "", verificationUrl)
 
 	return &authv1.RegisterResponse{
 		UserId:  userid,
@@ -111,7 +115,11 @@ func (s *AuthServer) VerifyEmail(
 	req *authv1.VerifyEmailRequest,
 ) (*authv1.VerifyEmailResponse, error) {
 	// Send asynchronously to prevent timing attacks
-	go s.sendVerificationEmail("", req.Email, req.VerificationUrl)
+	verificationUrl := req.VerificationUrl
+	if verificationUrl == "" {
+		verificationUrl = s.verificationUrl
+	}
+	go s.sendVerificationEmail("", req.Email, verificationUrl)
 
 	return &authv1.VerifyEmailResponse{}, nil
 }

@@ -33,7 +33,11 @@ func (s *AuthServer) RequestPasswordReset(
 	req *authv1.RequestPasswordResetRequest,
 ) (*authv1.RequestPasswordResetResponse, error) {
 	// Send asynchronously to prevent timing attacks
-	go s.sendPasswordResetEmail("", req.Email, req.ResetUrl)
+	resetUrl := req.ResetUrl
+	if resetUrl == "" {
+		resetUrl = s.resetPasswordUrl
+	}
+	go s.sendPasswordResetEmail("", req.Email, resetUrl)
 	return &authv1.RequestPasswordResetResponse{}, nil
 }
 
