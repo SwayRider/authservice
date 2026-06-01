@@ -30,6 +30,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -43,6 +44,7 @@ import (
 	"github.com/swayrider/authservice/internal/server"
 	"github.com/swayrider/authservice/internal/web"
 	"github.com/swayrider/authservice/migrations"
+	"github.com/swayrider/swlib/http/cookies"
 	log "github.com/swayrider/swlib/logger"
 
 	"github.com/swayrider/swlib/app"
@@ -118,6 +120,10 @@ const (
 )
 
 func main() {
+	if ns := os.Getenv("COOKIE_NAMESPACE"); ns != "" {
+		cookies.SetNamespace(ns)
+	}
+
 	stdConfigFields :=
 			app.BackendServiceFields |
 			app.DatabaseConnectionFields |
