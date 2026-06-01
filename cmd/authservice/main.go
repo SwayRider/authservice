@@ -117,6 +117,15 @@ const (
 
 	DefRegistrationMode = "open"
 	DefRegistrationUrl  = ""
+
+	FldVerificationUrl  = "verification-url"
+	FldResetPasswordUrl = "reset-password-url"
+
+	EnvVerificationUrl  = "VERIFICATION_URL"
+	EnvResetPasswordUrl = "RESET_PASSWORD_URL"
+
+	DefVerificationUrl  = ""
+	DefResetPasswordUrl = ""
 )
 
 func main() {
@@ -150,6 +159,12 @@ func main() {
 			app.NewStringConfigField(
 				FldRegistrationUrl, EnvRegistrationUrl,
 				"URL of the registration page (used in invite emails)", DefRegistrationUrl),
+			app.NewStringConfigField(
+				FldVerificationUrl, EnvVerificationUrl,
+				"Default URL for email verification (used when caller omits verificationUrl)", DefVerificationUrl),
+			app.NewStringConfigField(
+				FldResetPasswordUrl, EnvResetPasswordUrl,
+				"Default URL for password reset (used when caller omits resetUrl)", DefResetPasswordUrl),
 		).
 		WithDatabase(dbCtor, dbBootstrap).
 		WithBackgroundRoutines(
@@ -335,6 +350,8 @@ func grpcAuthRegistrar(r grpc.ServiceRegistrar, a app.App) {
 	mailerAddress := app.GetConfigField[string](a.Config(), FldMailerAddress)
 	registrationMode := app.GetConfigField[string](a.Config(), FldRegistrationMode)
 	registrationUrl := app.GetConfigField[string](a.Config(), FldRegistrationUrl)
+	verificationUrl := app.GetConfigField[string](a.Config(), FldVerificationUrl)
+	resetPasswordUrl := app.GetConfigField[string](a.Config(), FldResetPasswordUrl)
 
 	if registrationMode != "open" && registrationMode != "invite_only" {
 		lg.Fatalf("invalid REGISTRATION_MODE %q (must be 'open' or 'invite_only')", registrationMode)
@@ -347,6 +364,8 @@ func grpcAuthRegistrar(r grpc.ServiceRegistrar, a app.App) {
 		mailerAddress,
 		registrationMode,
 		registrationUrl,
+		verificationUrl,
+		resetPasswordUrl,
 	)
 	authv1.RegisterAuthServiceServer(r, srv)
 }

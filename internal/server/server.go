@@ -131,6 +131,8 @@ type AuthServer struct {
 	mailerAddress    string             // From address for outgoing emails
 	registrationMode string             // "open" (default) or "invite_only"
 	registrationUrl  string             // Registration page URL sent in invite emails (REGISTRATION_URL)
+	verificationUrl  string             // Default verification URL when caller omits it (VERIFICATION_URL)
+	resetPasswordUrl string             // Default password-reset URL when caller omits it (RESET_PASSWORD_URL)
 	l                *log.Logger        // Logger instance
 }
 
@@ -148,6 +150,8 @@ func NewAuthServer(
 	mailerAddress string,
 	registrationMode string,
 	registrationUrl string,
+	verificationUrl string,
+	resetPasswordUrl string,
 ) *AuthServer {
 	return &AuthServer{
 		dbConn:           conn,
@@ -155,6 +159,8 @@ func NewAuthServer(
 		mailerAddress:    mailerAddress,
 		registrationMode: registrationMode,
 		registrationUrl:  registrationUrl,
+		verificationUrl:  verificationUrl,
+		resetPasswordUrl: resetPasswordUrl,
 		l: lgr.Derive(
 			log.WithComponent("AuthServer"),
 			log.WithFunction("NewAuthServer"),

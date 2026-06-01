@@ -17,4 +17,5 @@ var (
 	ErrNoRefreshTokenFound       = errors.New("no refresh token found")
 	ErrNoPasswordResetTokenFound = errors.New("no password reset token found")
 	ErrServiceClientNotFound     = errors.New("service client not found")
+	ErrInviteNotFound            = errors.New("invite not found")
 )
