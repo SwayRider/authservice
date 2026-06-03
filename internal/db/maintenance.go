@@ -29,7 +29,7 @@ func (d *DB) DoDatabaseMaintenance(ctx context.Context) error {
 		lg.Debugln("lock already acquired")
 		return nil
 	}
-	defer d.releaseLock(ctx, LockDbMaintenance)
+	defer func() { _ = d.releaseLock(ctx, LockDbMaintenance) }()
 
 	err = d.cleanupRefreshTokens(ctx)
 	if err != nil {

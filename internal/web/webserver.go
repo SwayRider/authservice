@@ -42,8 +42,7 @@ var webFS embed.FS
 
 // WebServer wraps an HTTP server for serving static verification pages.
 type WebServer struct {
-	prefix string       // URL path prefix for all routes
-	http   *http.Server // Underlying HTTP server
+	http *http.Server // Underlying HTTP server
 }
 
 // Server returns the underlying HTTP server.
@@ -126,7 +125,7 @@ func New(
 // Start begins listening for HTTP requests in a background goroutine.
 func (s *WebServer) Start() error {
 	if s == nil {
-		return errors.New("Webserver initialization error")
+		return errors.New("webserver initialization error")
 	}
 	go func() {
 		err := s.http.ListenAndServe()

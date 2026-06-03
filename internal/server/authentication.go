@@ -162,8 +162,10 @@ func (s *AuthServer) Login(
 		return nil, err
 	}
 
-	grpc.SetHeader(ctx, metadata.Pairs(
-		"remember-me", fmt.Sprintf("%v", req.RememberMe)))
+	if err = grpc.SetHeader(ctx, metadata.Pairs(
+		"remember-me", fmt.Sprintf("%v", req.RememberMe))); err != nil {
+		lg.Warnf("failed to set remember-me header: %v", err)
+	}
 
 	lg.Debugf("user logged in with ID: %s", u.ID)
 	return &authv1.LoginResponse{

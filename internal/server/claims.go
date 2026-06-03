@@ -53,23 +53,3 @@ func (s *AuthServer) getUserFromClaims(
 	return u, nil
 }
 
-// getJwtIDFromClaims extracts the JWT ID (jti) from the context claims.
-// This is used to bind refresh tokens to specific access tokens.
-func (s *AuthServer) getJwtIDFromClaims(
-	ctx context.Context,
-) (string, error) {
-	lg := s.Logger().Derive(log.WithFunction("getJwtIDFromClaims"))
-
-	claims, ok := security.GetClaims(ctx)
-	if !ok {
-		lg.Debugln("Claims not found in grpc context")
-		return "", status.Errorf(codes.Unauthenticated, "claims not found")
-	}
-
-	id := claims.ID
-	if id == "" {
-		lg.Debugln("JWT ID not found in claims")
-		return "", status.Errorf(codes.NotFound, "jwt not found")
-	}
-	return id, nil
-}
