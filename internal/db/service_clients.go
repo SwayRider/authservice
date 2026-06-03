@@ -118,7 +118,7 @@ func (d *DB) ListServiceClients(
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	for rows.Next() {
 		var client model.ServiceClient

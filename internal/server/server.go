@@ -19,10 +19,8 @@
 package server
 
 import (
-	"github.com/swayrider/grpcclients/mailclient"
 	authv1 "github.com/swayrider/protos/auth/v1"
 	healthv1 "github.com/swayrider/protos/health/v1"
-	"github.com/swayrider/authservice/internal/db"
 	log "github.com/swayrider/swlib/logger"
 	"github.com/swayrider/swlib/security"
 )
@@ -126,14 +124,14 @@ const registrationModeInviteOnly = "invite_only"
 // token management, and service client authentication.
 type AuthServer struct {
 	authv1.UnimplementedAuthServiceServer
-	dbConn           *db.DB             // Database connection for user/token storage
-	mailClient       *mailclient.Client // Client for sending verification/reset emails
-	mailerAddress    string             // From address for outgoing emails
-	registrationMode string             // "open" (default) or "invite_only"
-	registrationUrl  string             // Registration page URL sent in invite emails (REGISTRATION_URL)
-	verificationUrl  string             // Default verification URL when caller omits it (VERIFICATION_URL)
-	resetPasswordUrl string             // Default password-reset URL when caller omits it (RESET_PASSWORD_URL)
-	l                *log.Logger        // Logger instance
+	dbConn           Database    // Database connection for user/token storage
+	mailClient       MailSender  // Client for sending verification/reset emails
+	mailerAddress    string      // From address for outgoing emails
+	registrationMode string      // "open" (default) or "invite_only"
+	registrationUrl  string      // Registration page URL sent in invite emails (REGISTRATION_URL)
+	verificationUrl  string      // Default verification URL when caller omits it (VERIFICATION_URL)
+	resetPasswordUrl string      // Default password-reset URL when caller omits it (RESET_PASSWORD_URL)
+	l                *log.Logger // Logger instance
 }
 
 // HealthServer implements the HealthService gRPC interface.
@@ -145,8 +143,8 @@ type HealthServer struct {
 
 // NewAuthServer creates a new AuthServer
 func NewAuthServer(
-	conn *db.DB, lgr *log.Logger,
-	mailClient *mailclient.Client,
+	conn Database, lgr *log.Logger,
+	mailClient MailSender,
 	mailerAddress string,
 	registrationMode string,
 	registrationUrl string,
@@ -169,7 +167,7 @@ func NewAuthServer(
 }
 
 // DB returns the database connection
-func (s *AuthServer) DB() *db.DB {
+func (s *AuthServer) DB() Database {
 	return s.dbConn
 }
 

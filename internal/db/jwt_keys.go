@@ -87,7 +87,7 @@ func (d *DB) GetVerificationKeys(ctx context.Context) ([]string, error) {
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	for rows.Next() {
 		var key string
@@ -115,7 +115,7 @@ func (d *DB) createNewKeyPair(ctx context.Context) error {
 		lg.Debugln("lock already acquired")
 		return nil
 	}
-	defer d.releaseLock(ctx, lockJwtRotation)
+	defer func() { _ = d.releaseLock(ctx, lockJwtRotation) }()
 
 	// Recheck if we need a rotation
 	// We might have entered this function because a rotation is needed, but
