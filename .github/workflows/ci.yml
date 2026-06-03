@@ -8,3 +8,5 @@ on:
 jobs:
   ci:
     uses: swayrider/ci-workflows/.github/workflows/go-ci.yml@main
+  dco:
+    uses: swayrider/ci-workflows/.github/workflows/dco-check.yml@main
