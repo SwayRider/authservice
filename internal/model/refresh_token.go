@@ -7,6 +7,8 @@
 package model
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"slices"
 	"strings"
@@ -22,13 +24,23 @@ const (
 
 // RefreshToken represents a refresh token for obtaining new access tokens.
 type RefreshToken struct {
-	Token      string    // Secure random token value (64 bytes)
+	Token      string    // Secure random token value (64 bytes) — plaintext, client-facing only, never persisted
+	TokenHash  string    // SHA-256 hex digest of Token — this is what's persisted/looked up in the DB
 	UserId     string    // UUID of the token owner
 	JwtID      string    // UUID of the associated JWT access token
 	ValidUntil time.Time // Token expiration time
 	Revoked    bool      // Whether the token has been revoked
 	Ip         string    // Client IP address at creation time
 	UserAgent  string    // Client user agent at creation time
+}
+
+// HashToken returns the hex-encoded SHA-256 digest of a refresh token's
+// plaintext value. Unsalted SHA-256 is appropriate here because the input
+// already carries 256 bits of entropy from GenerateSecureRandomString —
+// unlike password hashing, no salt or slow KDF is needed.
+func HashToken(token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(sum[:])
 }
 
 // NewRefreshToken creates a new refresh token
@@ -46,6 +58,7 @@ func NewRefreshToken(
 	}
 	return &RefreshToken{
 		Token:      str,
+		TokenHash:  HashToken(str),
 		UserId:     user.ID,
 		JwtID:      jwtID,
 		ValidUntil: time.Now().Add(ttl),

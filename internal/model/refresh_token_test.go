@@ -26,6 +26,12 @@ func TestNewRefreshToken(t *testing.T) {
 	if tok.Token == "" {
 		t.Error("expected non-empty token")
 	}
+	if tok.TokenHash != HashToken(tok.Token) {
+		t.Errorf("expected TokenHash to be HashToken(Token), got %q", tok.TokenHash)
+	}
+	if tok.TokenHash == tok.Token {
+		t.Error("expected TokenHash to differ from Token")
+	}
 	if tok.UserId != user.ID {
 		t.Errorf("expected UserId %q, got %q", user.ID, tok.UserId)
 	}
@@ -59,6 +65,39 @@ func TestNewRefreshToken_UniqueTokens(t *testing.T) {
 	}
 	if tok1.Token == tok2.Token {
 		t.Error("expected unique tokens for each call")
+	}
+}
+
+// =============================================================================
+// HashToken Tests
+// =============================================================================
+
+func TestHashToken_Deterministic(t *testing.T) {
+	const token = "some-refresh-token-value"
+	first := HashToken(token)
+	second := HashToken(token)
+	if first != second {
+		t.Errorf("expected HashToken to be deterministic for the same input, got %q and %q", first, second)
+	}
+}
+
+func TestHashToken_FixedLength(t *testing.T) {
+	hash := HashToken("arbitrary-input")
+	if len(hash) != 64 {
+		t.Errorf("expected 64 hex characters (SHA-256), got %d: %q", len(hash), hash)
+	}
+}
+
+func TestHashToken_DiffersFromInput(t *testing.T) {
+	const token = "plaintext-token"
+	if HashToken(token) == token {
+		t.Error("expected hash to differ from plaintext input")
+	}
+}
+
+func TestHashToken_DifferentInputsDifferentHashes(t *testing.T) {
+	if HashToken("token-a") == HashToken("token-b") {
+		t.Error("expected different inputs to produce different hashes")
 	}
 }
 

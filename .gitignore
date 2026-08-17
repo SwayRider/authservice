@@ -7,3 +7,8 @@ local.env
 # REST collections moved to testing repo
 REST/
 rest/
+
+.DS_Store
+
+# Code review reports
+CODE_REVIEW*.md
