@@ -103,6 +103,28 @@ func TestLogin_UserNotFound(t *testing.T) {
 	}
 }
 
+func TestLogin_DBConnectionError(t *testing.T) {
+	mdb := &mockDB{
+		getUserByEmailFn: func(_ context.Context, _ string) (*model.UserInternal, error) {
+			return nil, errors.New("connection refused")
+		},
+	}
+	srv := newTestServer(mdb, &noopMailSender{})
+	ctx := context.Background()
+
+	_, err := srv.Login(ctx, &authv1.LoginRequest{
+		Email:    "test@example.com",
+		Password: "irrelevant",
+	})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	st, _ := status.FromError(err)
+	if st.Code() != codes.Internal {
+		t.Errorf("code = %v, want %v", st.Code(), codes.Internal)
+	}
+}
+
 func TestLogin_NullPasswordHash(t *testing.T) {
 	mdb := &mockDB{
 		getUserByEmailFn: func(_ context.Context, _ string) (*model.UserInternal, error) {
@@ -405,6 +427,28 @@ func TestGetToken_ClientNotFound(t *testing.T) {
 	st, _ := status.FromError(err)
 	if st.Code() != codes.NotFound {
 		t.Errorf("code = %v, want %v", st.Code(), codes.NotFound)
+	}
+}
+
+func TestGetToken_DBConnectionError(t *testing.T) {
+	mdb := &mockDB{
+		getServiceClientByIDFn: func(_ context.Context, _ string) (*model.ServiceClientInternal, error) {
+			return nil, errors.New("connection refused")
+		},
+	}
+	srv := newTestServer(mdb, &noopMailSender{})
+	ctx := context.Background()
+
+	_, err := srv.GetToken(ctx, &authv1.GetTokenRequest{
+		ClientId:     "test-client-id",
+		ClientSecret: "secret",
+	})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	st, _ := status.FromError(err)
+	if st.Code() != codes.Internal {
+		t.Errorf("code = %v, want %v", st.Code(), codes.Internal)
 	}
 }
 
