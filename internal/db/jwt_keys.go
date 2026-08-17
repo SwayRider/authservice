@@ -20,7 +20,7 @@ import (
 )
 
 const (
-	jwtRotateThresshold = 3 // Rotate 3 days before expiration
+	jwtRotateThreshold = 3 // Rotate 3 days before expiration
 )
 
 // EnsureKeys creates a new key pair if needed
@@ -163,5 +163,5 @@ func (d *DB) keysNeedRotation(ctx context.Context) (bool, error) {
 		lg.Warnf("failed to retrieve latest jwt_keys: %v", err)
 		return false, err
 	}
-	return validUntil.Before(time.Now().Add(time.Hour * 24 * jwtRotateThresshold)), nil
+	return validUntil.Before(time.Now().Add(time.Hour * 24 * jwtRotateThreshold)), nil
 }
