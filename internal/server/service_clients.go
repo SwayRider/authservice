@@ -126,10 +126,10 @@ func (s *AuthServer) ListServiceClients(
 	pageSize := int(req.PageSize)
 
 	if page < 0 {
-		page = 1
+		page = defaultPage
 	}
 	if pageSize < 0 {
-		pageSize = 10
+		pageSize = defaultPageSize
 	}
 
 	numClients, err := s.DB().CountServiceClients(ctx)

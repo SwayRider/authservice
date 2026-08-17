@@ -119,6 +119,12 @@ func (s *AuthServer) RevokeInvite(
 	}, nil
 }
 
+// Pagination defaults shared by ListInvites and ListServiceClients.
+const (
+	defaultPage     = 1
+	defaultPageSize = 10
+)
+
 // ListInvites returns a paginated list of registration invites.
 // When req.Registered is set, only invites matching that status are returned.
 func (s *AuthServer) ListInvites(
@@ -130,10 +136,10 @@ func (s *AuthServer) ListInvites(
 	page := int(req.Page)
 	pageSize := int(req.PageSize)
 	if page < 0 {
-		page = 0
+		page = defaultPage
 	}
 	if pageSize < 0 {
-		pageSize = 0
+		pageSize = defaultPageSize
 	}
 
 	count, err := s.DB().CountInvites(ctx, req.Registered)
