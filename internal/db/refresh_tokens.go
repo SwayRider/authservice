@@ -27,7 +27,7 @@ func (d *DB) CreateRefreshToken(
 ) (token *model.RefreshToken, err error) {
 	lg := d.lg.Derive(log.WithFunction("CreateRefreshToken"))
 
-	err = d.DeleteRefreshToken(ctx, user.ID)
+	err = d.DeleteRefreshTokensByUserID(ctx, user.ID)
 	if err != nil {
 		lg.Warnf("CreateRefreshToken: %v", err)
 		return
@@ -100,6 +100,28 @@ func (d *DB) DeleteRefreshToken(
 		DELETE FROM refresh_tokens
 		WHERE token_hash = $1
 	`, hash)
+	return err
+}
+
+// DeleteRefreshTokensByUserID removes all refresh tokens belonging to a user.
+// This is used to revoke every active session for a user, e.g. when issuing
+// a new token (only one refresh token is allowed per user) and after a
+// password change/reset (to invalidate any tokens that may have been stolen).
+func (d *DB) DeleteRefreshTokensByUserID(
+	ctx context.Context,
+	userID string,
+) error {
+	lg := d.lg.Derive(log.WithFunction("DeleteRefreshTokensByUserID"))
+
+	if err := d.checkConnection(); err != nil {
+		lg.Warnf("DeleteRefreshTokensByUserID: %v", err)
+		return err
+	}
+
+	_, err := d.ExecContext(ctx, `
+		DELETE FROM refresh_tokens
+		WHERE user_id = $1
+	`, userID)
 	return err
 }
 

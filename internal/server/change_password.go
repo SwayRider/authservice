@@ -8,12 +8,12 @@ package server
 import (
 	"context"
 
-	passwordvalidator "github.com/wagslane/go-password-validator"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 	authv1 "github.com/swayrider/protos/auth/v1"
 	"github.com/swayrider/swlib/crypto"
 	log "github.com/swayrider/swlib/logger"
+	passwordvalidator "github.com/wagslane/go-password-validator"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // ChangePassword updates the password for the currently authenticated user.
@@ -23,6 +23,7 @@ import (
 //  2. Validate new password meets entropy requirements
 //  3. Verify old password matches stored hash
 //  4. Hash and store new password
+//  5. Revoke all active refresh tokens
 //
 // Returns:
 //   - codes.InvalidArgument: New password same as old, empty, or too weak
@@ -91,6 +92,12 @@ func (s *AuthServer) ChangePassword(
 	if err != nil {
 		lg.Debugf("user %s failed to change password: %v", user.Email, err)
 		return nil, status.Errorf(codes.Internal, "failed to change password")
+	}
+
+	// Revoke all active refresh tokens so a stolen token can't outlive the
+	// password rotation that was meant to invalidate it.
+	if err := s.DB().DeleteRefreshTokensByUserID(ctx, user.ID); err != nil {
+		lg.Warnf("user %s: failed to revoke refresh tokens after password change: %v", user.Email, err)
 	}
 
 	return &authv1.ChangePasswordResponse{

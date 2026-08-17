@@ -14,14 +14,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/swayrider/authservice/internal/model"
+	"github.com/swayrider/grpcclients/mailclient"
+	authv1 "github.com/swayrider/protos/auth/v1"
+	"github.com/swayrider/swlib/crypto"
+	log "github.com/swayrider/swlib/logger"
 	passwordvalidator "github.com/wagslane/go-password-validator"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"github.com/swayrider/grpcclients/mailclient"
-	authv1 "github.com/swayrider/protos/auth/v1"
-	"github.com/swayrider/authservice/internal/model"
-	"github.com/swayrider/swlib/crypto"
-	log "github.com/swayrider/swlib/logger"
 )
 
 // RequestPasswordReset initiates the password reset flow by sending a reset email.
@@ -48,7 +48,8 @@ func (s *AuthServer) RequestPasswordReset(
 //  2. Retrieve and validate reset token (existence, expiration, match)
 //  3. Validate new password meets entropy requirements
 //  4. Hash and store new password
-//  5. Delete the used reset token
+//  5. Revoke all active refresh tokens
+//  6. Delete the used reset token
 //
 // Returns:
 //   - codes.InvalidArgument: User not found, token invalid/expired, or weak password
@@ -116,7 +117,13 @@ func (s *AuthServer) ResetPassword(
 		return nil, status.Errorf(codes.Internal, "failed to reset password")
 	}
 
-	// Step 5: Clean up used token
+	// Step 5: Revoke all active refresh tokens so a stolen token can't
+	// outlive the password reset that was meant to invalidate it.
+	if err := s.DB().DeleteRefreshTokensByUserID(ctx, user.ID); err != nil {
+		lg.Warnf("user %s: failed to revoke refresh tokens after password reset: %v", user.Email, err)
+	}
+
+	// Step 6: Clean up used token
 	err = s.DB().DeleteResetPasswordToken(ctx, user.ID)
 	if err != nil {
 		lg.Debugf("failed to delete password reset token: %v", err)
