@@ -1,7 +1,12 @@
 // verify_user.go implements the email verification web handler.
 //
-// This handler processes verification links clicked from email. It validates
-// the token, marks the user as verified, and displays a success page.
+// This handler serves a confirmation page (GET) and processes the actual
+// verification (POST). It mirrors the reset_password.go pattern: the emailed
+// link only ever triggers a GET, which renders a page that auto-submits a
+// POST via inline JS, so a real user clicking the link still lands on the
+// success page in one hop while the state-changing request itself is a POST
+// (not a bare GET, which is CSRF-shaped and vulnerable to link-prefetching
+// email scanners silently consuming the token).
 
 package web
 
@@ -13,7 +18,11 @@ import (
 	log "github.com/swayrider/swlib/logger"
 )
 
-// verifyUser returns an HTTP handler that processes email verification requests.
+// verifyUser returns an HTTP handler for the email verification flow.
+//
+// GET: Renders the confirmation page with u and t preserved as hidden fields. Does no DB work.
+// POST: Validates the token, marks the user verified, and renders the completion page.
+//
 // URL parameters:
 //   - u: User ID
 //   - t: Verification token
@@ -28,21 +37,40 @@ func verifyUser(
 			log.WithFunction("verifyUser"),
 		)
 
+		if r.Method == http.MethodGet {
+			data := viewData(r)
+			if err := templates.ExecuteTemplate(w, "verify-user-confirm.html", data); err != nil {
+				lg.Errorf("failed to execute template: %v", err)
+				w.WriteHeader(http.StatusInternalServerError)
+			}
+			return
+		}
+
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+
+		if err := r.ParseForm(); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
 		data := viewData(r)
-		userIdIface, ok := data["u"]
-		if !ok {
+		userId := r.FormValue("u")
+		if userId == "" {
 			lg.Warnln("no user id")
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
-		userId := userIdIface.(string)
-		tokenIface, ok := data["t"]
-		if !ok {
+		data["u"] = userId
+		token := r.FormValue("t")
+		if token == "" {
 			lg.Warnln("no token")
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
-		token := tokenIface.(string)
+		data["t"] = token
 
 		ctx := r.Context()
 
@@ -50,6 +78,7 @@ func verifyUser(
 		if err != nil {
 			lg.Errorf("user %s not found: %v", userId, err)
 			w.WriteHeader(http.StatusNotFound)
+			return
 		}
 		if !user.IsVerified {
 			tkn, err := dbConn.GetVerificationToken(ctx, &user.User)

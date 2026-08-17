@@ -17,6 +17,7 @@ import (
 	"html/template"
 	"io/fs"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/swayrider/authservice/internal/db"
@@ -25,16 +26,24 @@ import (
 	log "github.com/swayrider/swlib/logger"
 )
 
-func init() {
-	security.PublicEndpoint("/web")
-	security.PublicEndpoint("/web/")
-	security.PublicEndpoint("/web/index.html")
+// registerEndpointProfiles marks the web server's pages as publicly
+// accessible (or unverified-only) so the Auth middleware wrapping the mux
+// lets them through. The profiles must follow the configured prefix — the
+// paths are matched against the request path, so hardcoding /web here would
+// 401 every page as soon as WEB_PATH_PREFIX changes.
+func registerEndpointProfiles(prefix string) {
+	trimmed := strings.TrimRight(prefix, "/")
+	security.PublicEndpoint(prefix)
+	if trimmed != "" {
+		security.PublicEndpoint(trimmed)
+	}
+	security.PublicEndpoint(prefix + "index.html")
 
-	security.PublicEndpoint("/web/verify-user")
-	security.PublicEndpoint("/web/reset-password")
-	security.PublicEndpoint("/web/register")
+	security.PublicEndpoint(prefix + "verify-user")
+	security.PublicEndpoint(prefix + "reset-password")
+	security.PublicEndpoint(prefix + "register")
 
-	security.UnverifiedEndpoint("/web/registration-complete")
+	security.UnverifiedEndpoint(prefix + "registration-complete")
 }
 
 //go:embed templates
@@ -78,6 +87,8 @@ func New(
 	} else if prefix[len(prefix)-1] != '/' {
 		prefix += "/"
 	}
+
+	registerEndpointProfiles(prefix)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc(

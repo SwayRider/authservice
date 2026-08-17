@@ -46,6 +46,9 @@ var translations = map[string]map[string]string{
 		"reset_password_complete_description":   "Your password has been reset. You can now log in with your new password.",
 		"reset_password_error":                  "Failed to reset password.",
 		"reset_password_invalid_link":           "This reset link is invalid or has expired.",
+		"verify_user_confirm":                   "Confirming your email",
+		"verify_user_confirm_description":       "Please wait while we verify your account.",
+		"verify_user_confirm_submit":            "Verify Email",
 	},
 	"nl": {
 		"index":                  "Index",
@@ -85,6 +88,9 @@ var translations = map[string]map[string]string{
 		"reset_password_complete_description":   "Uw wachtwoord is gereset. U kunt nu inloggen met uw nieuw wachtwoord.",
 		"reset_password_error":                  "Wachtwoord resetten mislukt.",
 		"reset_password_invalid_link":           "Deze resetlink is ongeldig of verlopen.",
+		"verify_user_confirm":                   "E-mail bevestigen",
+		"verify_user_confirm_description":       "Even geduld, we verifiëren uw account.",
+		"verify_user_confirm_submit":            "E-mail Verifiëren",
 	},
 }
 

@@ -110,6 +110,8 @@ Requires **Go 1.26.2** or later.
 | `WEB_PORT` | `-web-port` | 8000 | Static web server |
 | `WEB_PATH_PREFIX` | `-web-path-prefix` | `/web` | Web URL prefix |
 
+> **Note:** the API gateway exposes these pages under its own `/web` namespace and maps it onto `WEB_PATH_PREFIX` (`AUTHSERVICE_WEB_PATH_PREFIX` in the gateway, default `/web`). If you change this value, update the gateway's `AUTHSERVICE_WEB_PATH_PREFIX` (and `AUTHSERVICE_WEB_PORT` with `WEB_PORT`) to match.
+
 ### Database Configuration
 
 | Env | Flag | Default | Description |
