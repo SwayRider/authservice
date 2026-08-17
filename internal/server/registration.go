@@ -24,6 +24,7 @@ import (
 	"github.com/swayrider/authservice/internal/model"
 	"github.com/swayrider/swlib/crypto"
 	log "github.com/swayrider/swlib/logger"
+	"github.com/swayrider/swlib/security"
 )
 
 // Register creates a new user account with the provided email and password.
@@ -76,6 +77,14 @@ func (s *AuthServer) Register(
 		Message: "If this email is eligible for registration, check your inbox to continue.",
 	}
 
+	// Per-source-IP budget on top of the per-address cooldown below: the
+	// cooldown alone doesn't stop an attacker cycling through many distinct
+	// target addresses. Only gates the mail send -- account creation and
+	// invite handling proceed regardless, same as the per-address cooldown.
+	origIp, _ := security.GetOrigIp(ctx)
+	callerIP := model.FirstIP(origIp)
+	ipAllowsEmailSend := !s.isLocked(ctx, db.ScopeEmailSendByIP, callerIP)
+
 	if s.registrationMode == registrationModeInviteOnly {
 		invited, err := s.DB().IsEmailInvited(ctx, req.Email)
 		if err != nil {
@@ -101,8 +110,11 @@ func (s *AuthServer) Register(
 			// would -- shares its cooldown scope/budget since it's
 			// functionally the same action (a password-reset email to this
 			// address).
-			if s.tryConsumeEmailCooldown(ctx, db.ScopeEmailPasswordReset, normalizeIdentifier(req.Email)) {
-				go s.sendPasswordResetEmail("", req.Email, s.resetPasswordUrl)
+			if ipAllowsEmailSend {
+				s.recordEmailSendAttempt(ctx, callerIP)
+				if s.tryConsumeEmailCooldown(ctx, db.ScopeEmailPasswordReset, normalizeIdentifier(req.Email)) {
+					go s.sendPasswordResetEmail("", req.Email, s.resetPasswordUrl)
+				}
 			}
 			return resp, nil
 		}
@@ -117,8 +129,11 @@ func (s *AuthServer) Register(
 		}
 	}
 
-	if s.tryConsumeEmailCooldown(ctx, db.ScopeEmailVerification, normalizeIdentifier(req.Email)) {
-		go s.sendVerificationEmail(userid, "", verificationUrl)
+	if ipAllowsEmailSend {
+		s.recordEmailSendAttempt(ctx, callerIP)
+		if s.tryConsumeEmailCooldown(ctx, db.ScopeEmailVerification, normalizeIdentifier(req.Email)) {
+			go s.sendVerificationEmail(userid, "", verificationUrl)
+		}
 	}
 
 	return resp, nil
@@ -137,12 +152,23 @@ func (s *AuthServer) VerifyEmail(
 	if verificationUrl == "" {
 		verificationUrl = s.verificationUrl
 	}
-	// Cooldown check runs synchronously and shares its budget with Register
-	// (same db.ScopeEmailVerification) so an attacker can't reset it by
-	// alternating endpoints for the same address. The response stays
-	// unconditionally generic either way -- only the send is skipped.
-	if s.tryConsumeEmailCooldown(ctx, db.ScopeEmailVerification, normalizeIdentifier(req.Email)) {
-		go s.sendVerificationEmail("", req.Email, verificationUrl)
+
+	// Per-source-IP budget (shared with Register/RequestPasswordReset via
+	// db.ScopeEmailSendByIP) on top of the per-address cooldown below: the
+	// cooldown alone doesn't stop an attacker cycling through many distinct
+	// target addresses.
+	origIp, _ := security.GetOrigIp(ctx)
+	callerIP := model.FirstIP(origIp)
+	if !s.isLocked(ctx, db.ScopeEmailSendByIP, callerIP) {
+		s.recordEmailSendAttempt(ctx, callerIP)
+		// Cooldown check runs synchronously and shares its budget with
+		// Register (same db.ScopeEmailVerification) so an attacker can't
+		// reset it by alternating endpoints for the same address. The
+		// response stays unconditionally generic either way -- only the send
+		// is skipped.
+		if s.tryConsumeEmailCooldown(ctx, db.ScopeEmailVerification, normalizeIdentifier(req.Email)) {
+			go s.sendVerificationEmail("", req.Email, verificationUrl)
+		}
 	}
 
 	return &authv1.VerifyEmailResponse{}, nil
