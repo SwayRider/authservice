@@ -98,7 +98,9 @@ func (s *AuthServer) Register(
 	if verificationUrl == "" {
 		verificationUrl = s.verificationUrl
 	}
-	go s.sendVerificationEmail(userid, "", verificationUrl)
+	if s.tryConsumeEmailCooldown(ctx, db.ScopeEmailVerification, normalizeIdentifier(req.Email)) {
+		go s.sendVerificationEmail(userid, "", verificationUrl)
+	}
 
 	return &authv1.RegisterResponse{
 		UserId:  userid,
@@ -119,7 +121,13 @@ func (s *AuthServer) VerifyEmail(
 	if verificationUrl == "" {
 		verificationUrl = s.verificationUrl
 	}
-	go s.sendVerificationEmail("", req.Email, verificationUrl)
+	// Cooldown check runs synchronously and shares its budget with Register
+	// (same db.ScopeEmailVerification) so an attacker can't reset it by
+	// alternating endpoints for the same address. The response stays
+	// unconditionally generic either way -- only the send is skipped.
+	if s.tryConsumeEmailCooldown(ctx, db.ScopeEmailVerification, normalizeIdentifier(req.Email)) {
+		go s.sendVerificationEmail("", req.Email, verificationUrl)
+	}
 
 	return &authv1.VerifyEmailResponse{}, nil
 }

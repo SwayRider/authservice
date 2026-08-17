@@ -204,6 +204,195 @@ func TestLogin_Success(t *testing.T) {
 }
 
 // =============================================================================
+// Login lockout Tests
+// =============================================================================
+
+func testThrottleConfig() ThrottleConfig {
+	return ThrottleConfig{
+		LoginMaxAttempts:      5,
+		LoginWindow:           15 * time.Minute,
+		LoginLockoutDuration:  15 * time.Minute,
+		ClientMaxAttempts:     5,
+		ClientWindow:          15 * time.Minute,
+		ClientLockoutDuration: 15 * time.Minute,
+		EmailCooldown:         60 * time.Second,
+	}
+}
+
+func TestLogin_LockedIdentifier_ReturnsUniformErrorWithoutLookup(t *testing.T) {
+	lookupCalled := false
+	mdb := &mockDB{
+		isAttemptLockedFn: func(_ context.Context, scope db.ThrottleScope, identifier string) (bool, error) {
+			if scope != db.ScopeLogin || identifier != "test@example.com" {
+				t.Errorf("unexpected scope/identifier: %v/%s", scope, identifier)
+			}
+			return true, nil
+		},
+		getUserByEmailFn: func(_ context.Context, _ string) (*model.UserInternal, error) {
+			lookupCalled = true
+			return testUser(), nil
+		},
+	}
+	srv := newTestServerWithThrottle(mdb, &noopMailSender{}, testThrottleConfig())
+	ctx := context.Background()
+
+	_, err := srv.Login(ctx, &authv1.LoginRequest{
+		Email:    "test@example.com",
+		Password: testPassword,
+	})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	st, _ := status.FromError(err)
+	if st.Code() != codes.Unauthenticated {
+		t.Errorf("code = %v, want %v", st.Code(), codes.Unauthenticated)
+	}
+	if st.Message() != "invalid email or password" {
+		t.Errorf("message = %q, want %q", st.Message(), "invalid email or password")
+	}
+	if lookupCalled {
+		t.Error("expected GetUserByEmail not to be called when locked out")
+	}
+}
+
+func TestLogin_LockedNonexistentEmail_SameErrorAsLockedRealAccount(t *testing.T) {
+	mdb := &mockDB{
+		isAttemptLockedFn: func(_ context.Context, _ db.ThrottleScope, _ string) (bool, error) {
+			return true, nil
+		},
+	}
+	srv := newTestServerWithThrottle(mdb, &noopMailSender{}, testThrottleConfig())
+	ctx := context.Background()
+
+	_, err := srv.Login(ctx, &authv1.LoginRequest{
+		Email:    "nobody-locked@example.com",
+		Password: "irrelevant",
+	})
+	st, _ := status.FromError(err)
+
+	_, err2 := srv.Login(ctx, &authv1.LoginRequest{
+		Email:    "test@example.com",
+		Password: testPassword,
+	})
+	st2, _ := status.FromError(err2)
+
+	if st.Code() != st2.Code() || st.Message() != st2.Message() {
+		t.Errorf("locked nonexistent-account error (%v: %q) differs from locked real-account error (%v: %q)",
+			st.Code(), st.Message(), st2.Code(), st2.Message())
+	}
+}
+
+func TestLogin_RecordsFailureOnUserNotFound(t *testing.T) {
+	var recordedSuccess *bool
+	mdb := &mockDB{
+		getUserByEmailFn: func(_ context.Context, _ string) (*model.UserInternal, error) {
+			return nil, db.ErrUserNotFound
+		},
+		recordAttemptResultFn: func(_ context.Context, scope db.ThrottleScope, identifier string, success bool, _ int, _, _ time.Duration) error {
+			if scope != db.ScopeLogin || identifier != "nobody@example.com" {
+				t.Errorf("unexpected scope/identifier: %v/%s", scope, identifier)
+			}
+			recordedSuccess = &success
+			return nil
+		},
+	}
+	srv := newTestServerWithThrottle(mdb, &noopMailSender{}, testThrottleConfig())
+	ctx := context.Background()
+
+	_, _ = srv.Login(ctx, &authv1.LoginRequest{
+		Email:    "nobody@example.com",
+		Password: "irrelevant",
+	})
+	if recordedSuccess == nil {
+		t.Fatal("expected RecordAttemptResult to be called")
+	}
+	if *recordedSuccess {
+		t.Error("expected failure to be recorded as success=false")
+	}
+}
+
+func TestLogin_RecordsFailureOnWrongPassword(t *testing.T) {
+	var recordedSuccess *bool
+	mdb := &mockDB{
+		getUserByEmailFn: func(_ context.Context, _ string) (*model.UserInternal, error) {
+			return testUser(), nil
+		},
+		recordAttemptResultFn: func(_ context.Context, _ db.ThrottleScope, _ string, success bool, _ int, _, _ time.Duration) error {
+			recordedSuccess = &success
+			return nil
+		},
+	}
+	srv := newTestServerWithThrottle(mdb, &noopMailSender{}, testThrottleConfig())
+	ctx := context.Background()
+
+	_, _ = srv.Login(ctx, &authv1.LoginRequest{
+		Email:    "test@example.com",
+		Password: "wrongpassword",
+	})
+	if recordedSuccess == nil {
+		t.Fatal("expected RecordAttemptResult to be called")
+	}
+	if *recordedSuccess {
+		t.Error("expected failure to be recorded as success=false")
+	}
+}
+
+func TestLogin_DoesNotRecordOnInternalDBError(t *testing.T) {
+	recordCalled := false
+	mdb := &mockDB{
+		getUserByEmailFn: func(_ context.Context, _ string) (*model.UserInternal, error) {
+			return nil, errors.New("connection refused")
+		},
+		recordAttemptResultFn: func(_ context.Context, _ db.ThrottleScope, _ string, _ bool, _ int, _, _ time.Duration) error {
+			recordCalled = true
+			return nil
+		},
+	}
+	srv := newTestServerWithThrottle(mdb, &noopMailSender{}, testThrottleConfig())
+	ctx := context.Background()
+
+	_, _ = srv.Login(ctx, &authv1.LoginRequest{
+		Email:    "test@example.com",
+		Password: "irrelevant",
+	})
+	if recordCalled {
+		t.Error("expected RecordAttemptResult NOT to be called on an internal DB error " +
+			"(recording it would let an attacker trip DB errors to lock out a victim)")
+	}
+}
+
+func TestLogin_RecordsSuccessOnCorrectCredentials(t *testing.T) {
+	var recordedSuccess *bool
+	mdb := &mockDB{
+		getUserByEmailFn: func(_ context.Context, _ string) (*model.UserInternal, error) {
+			return testUser(), nil
+		},
+		recordAttemptResultFn: func(_ context.Context, scope db.ThrottleScope, _ string, success bool, _ int, _, _ time.Duration) error {
+			if scope != db.ScopeLogin {
+				t.Errorf("unexpected scope: %v", scope)
+			}
+			recordedSuccess = &success
+			return nil
+		},
+	}
+	srv := newTestServerWithThrottle(mdb, &noopMailSender{}, testThrottleConfig())
+	ctx := context.Background()
+
+	if _, err := srv.Login(ctx, &authv1.LoginRequest{
+		Email:    "test@example.com",
+		Password: testPassword,
+	}); err != nil {
+		t.Fatalf("Login failed: %v", err)
+	}
+	if recordedSuccess == nil {
+		t.Fatal("expected RecordAttemptResult to be called")
+	}
+	if !*recordedSuccess {
+		t.Error("expected success to be recorded as success=true")
+	}
+}
+
+// =============================================================================
 // Refresh Tests
 // =============================================================================
 
@@ -471,5 +660,154 @@ func TestGetToken_WrongSecret(t *testing.T) {
 	st, _ := status.FromError(err)
 	if st.Code() != codes.Unauthenticated {
 		t.Errorf("code = %v, want %v", st.Code(), codes.Unauthenticated)
+	}
+}
+
+// =============================================================================
+// GetToken lockout Tests
+// =============================================================================
+
+func TestGetToken_LockedClient_ReturnsUniformErrorWithoutLookup(t *testing.T) {
+	lookupCalled := false
+	mdb := &mockDB{
+		isAttemptLockedFn: func(_ context.Context, scope db.ThrottleScope, identifier string) (bool, error) {
+			if scope != db.ScopeGetToken || identifier != "test-client-id" {
+				t.Errorf("unexpected scope/identifier: %v/%s", scope, identifier)
+			}
+			return true, nil
+		},
+		getServiceClientByIDFn: func(_ context.Context, _ string) (*model.ServiceClientInternal, error) {
+			lookupCalled = true
+			return testServiceClient([]string{"read"}), nil
+		},
+	}
+	srv := newTestServerWithThrottle(mdb, &noopMailSender{}, testThrottleConfig())
+	ctx := context.Background()
+
+	_, err := srv.GetToken(ctx, &authv1.GetTokenRequest{
+		ClientId:     "test-client-id",
+		ClientSecret: testSecret,
+	})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	st, _ := status.FromError(err)
+	if st.Code() != codes.Unauthenticated {
+		t.Errorf("code = %v, want %v", st.Code(), codes.Unauthenticated)
+	}
+	if st.Message() != "service client authentication error" {
+		t.Errorf("message = %q, want %q", st.Message(), "service client authentication error")
+	}
+	if lookupCalled {
+		t.Error("expected GetServiceClientByID not to be called when locked out")
+	}
+}
+
+func TestGetToken_RecordsFailureOnClientNotFound(t *testing.T) {
+	var recordedSuccess *bool
+	mdb := &mockDB{
+		getServiceClientByIDFn: func(_ context.Context, _ string) (*model.ServiceClientInternal, error) {
+			return nil, db.ErrServiceClientNotFound
+		},
+		recordAttemptResultFn: func(_ context.Context, scope db.ThrottleScope, identifier string, success bool, _ int, _, _ time.Duration) error {
+			if scope != db.ScopeGetToken || identifier != "unknown" {
+				t.Errorf("unexpected scope/identifier: %v/%s", scope, identifier)
+			}
+			recordedSuccess = &success
+			return nil
+		},
+	}
+	srv := newTestServerWithThrottle(mdb, &noopMailSender{}, testThrottleConfig())
+	ctx := context.Background()
+
+	_, _ = srv.GetToken(ctx, &authv1.GetTokenRequest{
+		ClientId:     "unknown",
+		ClientSecret: "secret",
+	})
+	if recordedSuccess == nil {
+		t.Fatal("expected RecordAttemptResult to be called")
+	}
+	if *recordedSuccess {
+		t.Error("expected failure to be recorded as success=false")
+	}
+}
+
+func TestGetToken_RecordsFailureOnWrongSecret(t *testing.T) {
+	var recordedSuccess *bool
+	mdb := &mockDB{
+		getServiceClientByIDFn: func(_ context.Context, _ string) (*model.ServiceClientInternal, error) {
+			return testServiceClient([]string{"read"}), nil
+		},
+		recordAttemptResultFn: func(_ context.Context, _ db.ThrottleScope, _ string, success bool, _ int, _, _ time.Duration) error {
+			recordedSuccess = &success
+			return nil
+		},
+	}
+	srv := newTestServerWithThrottle(mdb, &noopMailSender{}, testThrottleConfig())
+	ctx := context.Background()
+
+	_, _ = srv.GetToken(ctx, &authv1.GetTokenRequest{
+		ClientId:     "test-client-id",
+		ClientSecret: "wrong-secret",
+	})
+	if recordedSuccess == nil {
+		t.Fatal("expected RecordAttemptResult to be called")
+	}
+	if *recordedSuccess {
+		t.Error("expected failure to be recorded as success=false")
+	}
+}
+
+func TestGetToken_DoesNotRecordOnInternalDBError(t *testing.T) {
+	recordCalled := false
+	mdb := &mockDB{
+		getServiceClientByIDFn: func(_ context.Context, _ string) (*model.ServiceClientInternal, error) {
+			return nil, errors.New("connection refused")
+		},
+		recordAttemptResultFn: func(_ context.Context, _ db.ThrottleScope, _ string, _ bool, _ int, _, _ time.Duration) error {
+			recordCalled = true
+			return nil
+		},
+	}
+	srv := newTestServerWithThrottle(mdb, &noopMailSender{}, testThrottleConfig())
+	ctx := context.Background()
+
+	_, _ = srv.GetToken(ctx, &authv1.GetTokenRequest{
+		ClientId:     "test-client-id",
+		ClientSecret: "secret",
+	})
+	if recordCalled {
+		t.Error("expected RecordAttemptResult NOT to be called on an internal DB error")
+	}
+}
+
+func TestGetToken_RecordsSuccessOnCorrectCredentials(t *testing.T) {
+	var recordedSuccess *bool
+	mdb := &mockDB{
+		getServiceClientByIDFn: func(_ context.Context, _ string) (*model.ServiceClientInternal, error) {
+			return testServiceClient([]string{"read"}), nil
+		},
+		recordAttemptResultFn: func(_ context.Context, scope db.ThrottleScope, _ string, success bool, _ int, _, _ time.Duration) error {
+			if scope != db.ScopeGetToken {
+				t.Errorf("unexpected scope: %v", scope)
+			}
+			recordedSuccess = &success
+			return nil
+		},
+	}
+	srv := newTestServerWithThrottle(mdb, &noopMailSender{}, testThrottleConfig())
+	ctx := context.Background()
+
+	if _, err := srv.GetToken(ctx, &authv1.GetTokenRequest{
+		ClientId:     "test-client-id",
+		ClientSecret: testSecret,
+	}); err != nil {
+		t.Fatalf("GetToken failed: %v", err)
+	}
+	if recordedSuccess == nil {
+		t.Fatal("expected RecordAttemptResult to be called")
+	}
+	if !*recordedSuccess {
+		t.Error("expected success to be recorded as success=true")
 	}
 }

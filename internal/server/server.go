@@ -109,9 +109,14 @@ func init() {
 
 	// Check - Public: detailed health status
 	security.PublicEndpoint("/health.v1.HealthService/Check")
+	// Exempt from the coarse gRPC rate limiter: throttling a k8s
+	// readiness/liveness probe could itself cause a crash-loop, a worse
+	// outcome than the threat the limiter defends against.
+	security.SkipRateLimitEndpoint("/health.v1.HealthService/Check")
 
 	// Ping - Public: simple liveness check
 	security.PublicEndpoint("/health.v1.HealthService/Ping")
+	security.SkipRateLimitEndpoint("/health.v1.HealthService/Ping")
 }
 
 // registrationModeInviteOnly is the REGISTRATION_MODE value that restricts
@@ -124,14 +129,15 @@ const registrationModeInviteOnly = "invite_only"
 // token management, and service client authentication.
 type AuthServer struct {
 	authv1.UnimplementedAuthServiceServer
-	dbConn           Database    // Database connection for user/token storage
-	mailClient       MailSender  // Client for sending verification/reset emails
-	mailerAddress    string      // From address for outgoing emails
-	registrationMode string      // "open" (default) or "invite_only"
-	registrationUrl  string      // Registration page URL sent in invite emails (REGISTRATION_URL)
-	verificationUrl  string      // Default verification URL when caller omits it (VERIFICATION_URL)
-	resetPasswordUrl string      // Default password-reset URL when caller omits it (RESET_PASSWORD_URL)
-	l                *log.Logger // Logger instance
+	dbConn           Database      // Database connection for user/token storage
+	mailClient       MailSender    // Client for sending verification/reset emails
+	mailerAddress    string        // From address for outgoing emails
+	registrationMode string        // "open" (default) or "invite_only"
+	registrationUrl  string        // Registration page URL sent in invite emails (REGISTRATION_URL)
+	verificationUrl  string        // Default verification URL when caller omits it (VERIFICATION_URL)
+	resetPasswordUrl string        // Default password-reset URL when caller omits it (RESET_PASSWORD_URL)
+	throttle         ThrottleConfig // Account lockout / email cooldown thresholds
+	l                *log.Logger   // Logger instance
 }
 
 // HealthServer implements the HealthService gRPC interface.
@@ -150,6 +156,7 @@ func NewAuthServer(
 	registrationUrl string,
 	verificationUrl string,
 	resetPasswordUrl string,
+	throttle ThrottleConfig,
 ) *AuthServer {
 	return &AuthServer{
 		dbConn:           conn,
@@ -159,6 +166,7 @@ func NewAuthServer(
 		registrationUrl:  registrationUrl,
 		verificationUrl:  verificationUrl,
 		resetPasswordUrl: resetPasswordUrl,
+		throttle:         throttle,
 		l: lgr.Derive(
 			log.WithComponent("AuthServer"),
 			log.WithFunction("NewAuthServer"),

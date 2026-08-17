@@ -123,19 +123,37 @@ func (s *AuthServer) Login(
 ) (*authv1.LoginResponse, error) {
 	lg := s.Logger().Derive(log.WithFunction("Login"))
 
+	identifier := normalizeIdentifier(req.Email)
+
+	// Checked before the account is even looked up, and keyed the same way
+	// regardless of whether it exists, so a locked-out attempt and an
+	// unknown-account attempt are indistinguishable from the caller's
+	// perspective -- preserving the uniform "invalid email or password"
+	// anti-enumeration invariant this handler already relies on below.
+	if s.isLocked(ctx, db.ScopeLogin, identifier) {
+		return nil, status.Error(
+			codes.Unauthenticated,
+			"invalid email or password")
+	}
+
 	u, err := s.DB().GetUserByEmail(ctx, req.Email)
 	if err != nil {
 		lg.Debugf("user %s failed a login attempt: %v", req.Email, err)
 		if errors.Is(err, db.ErrUserNotFound) {
+			s.recordLoginAttempt(ctx, identifier, false)
 			return nil, status.Error(
 				codes.Unauthenticated,
 				"invalid email or password")
 		}
+		// Not a credential-guessing signal -- an infrastructure error here
+		// must not be recordable, or an attacker could deliberately trip DB
+		// errors to lock out a victim's account.
 		return nil, status.Error(codes.Internal, "internal error")
 	}
 
 	if !u.PasswordHash.Valid {
 		lg.Debugf("user %s failed a login attempt: invalid password", req.Email)
+		s.recordLoginAttempt(ctx, identifier, false)
 		return nil, status.Error(
 			codes.Unauthenticated,
 			"invalid email or password")
@@ -145,16 +163,20 @@ func (s *AuthServer) Login(
 	passwordOk, err = crypto.VerifyPassword(u.PasswordHash.String, req.Password)
 	if err != nil {
 		lg.Debugf("user %s failed a login attempt: %v", req.Email, err)
+		s.recordLoginAttempt(ctx, identifier, false)
 		return nil, status.Error(
 			codes.Unauthenticated,
 			"invalid email or password")
 	}
 	if !passwordOk {
 		lg.Debugf("user %s failed a login attempt: invalid password", req.Email)
+		s.recordLoginAttempt(ctx, identifier, false)
 		return nil, status.Error(
 			codes.Unauthenticated,
 			"invalid email or password")
 	}
+
+	s.recordLoginAttempt(ctx, identifier, true)
 
 	origIp, _ := security.GetOrigIp(ctx)
 	userAgent, _ := security.GetUserAgent(ctx)
@@ -224,19 +246,29 @@ func (s *AuthServer) GetToken(
 ) (*authv1.GetTokenResponse, error) {
 	lg := s.Logger().Derive(log.WithFunction("GetToken"))
 
+	// client IDs are generated, not user-typed -- no normalization needed.
+	if s.isLocked(ctx, db.ScopeGetToken, req.ClientId) {
+		return nil, status.Error(
+			codes.Unauthenticated,
+			"service client authentication error")
+	}
+
 	clnt, err := s.DB().GetServiceClientByID(ctx, req.ClientId)
 	if err != nil {
 		lg.Debugf("service client %s not found: %v", req.ClientId, err)
 		if errors.Is(err, db.ErrServiceClientNotFound) {
+			s.recordClientAttempt(ctx, req.ClientId, false)
 			return nil, status.Error(
 				codes.NotFound,
 				"service client not found")
 		}
+		// Infrastructure error -- not recorded, same reasoning as Login.
 		return nil, status.Error(codes.Internal, "internal error")
 	}
 
 	if !clnt.ClientSecretHash.Valid {
 		lg.Debugf("service client %s not found: invalid secret", req.ClientId)
+		s.recordClientAttempt(ctx, req.ClientId, false)
 		return nil, status.Error(
 			codes.Unauthenticated,
 			"service client authentication error")
@@ -247,16 +279,20 @@ func (s *AuthServer) GetToken(
 	secretOk, err = crypto.VerifyPassword(clnt.ClientSecretHash.String, req.ClientSecret)
 	if err != nil {
 		lg.Debugf("service client %s authentication error: %v", req.ClientId, err)
+		s.recordClientAttempt(ctx, req.ClientId, false)
 		return nil, status.Error(
 			codes.Unauthenticated,
 			"service client authentication error")
 	}
 	if !secretOk {
 		lg.Debugf("service client %s authentication error: invalid secret", req.ClientId)
+		s.recordClientAttempt(ctx, req.ClientId, false)
 		return nil, status.Error(
 			codes.Unauthenticated,
 			"service client authentication error")
 	}
+
+	s.recordClientAttempt(ctx, req.ClientId, true)
 
 	accessToken, validUntil, grantedScopes, err := s.createServiceToken(ctx, clnt, req.Scopes)
 	if err != nil {
