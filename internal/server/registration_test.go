@@ -8,6 +8,7 @@ import (
 	"github.com/swayrider/authservice/internal/db"
 	"github.com/swayrider/authservice/internal/model"
 	authv1 "github.com/swayrider/protos/auth/v1"
+	log "github.com/swayrider/swlib/logger"
 )
 
 // =============================================================================
@@ -36,8 +37,11 @@ func TestRegister_CooldownActive_StillCreatesAccountButSkipsSend(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Register failed: %v", err)
 	}
-	if resp.UserId != "new-user-id" {
-		t.Errorf("UserId = %q, want %q", resp.UserId, "new-user-id")
+	// UserId is never echoed back -- see TestRegister_DuplicateEmail... below
+	// for why (anti-enumeration: the response must be identical whether or
+	// not an account was actually created).
+	if resp.UserId != "" {
+		t.Errorf("UserId = %q, want empty", resp.UserId)
 	}
 	if !registerCalled {
 		t.Error("expected RegisterUser to be called even when cooldown suppresses the email")
@@ -99,6 +103,140 @@ func TestRegister_UsesEmailVerificationScope(t *testing.T) {
 	}
 	if gotIdentifier != "new@example.com" {
 		t.Errorf("identifier = %q, want normalized %q", gotIdentifier, "new@example.com")
+	}
+}
+
+// =============================================================================
+// Register enumeration Tests
+// =============================================================================
+
+func TestRegister_NewEmail_Succeeds(t *testing.T) {
+	mdb := &mockDB{
+		registerUserFn: func(_ context.Context, _, _ string) (string, error) {
+			return "new-user-id", nil
+		},
+	}
+	srv := newTestServer(mdb, &noopMailSender{})
+	ctx := context.Background()
+
+	resp, err := srv.Register(ctx, &authv1.RegisterRequest{
+		Email:    "new@example.com",
+		Password: testPassword,
+	})
+	if err != nil {
+		t.Fatalf("Register failed: %v", err)
+	}
+	if resp.UserId != "" {
+		t.Errorf("UserId = %q, want empty", resp.UserId)
+	}
+	if resp.Message == "" {
+		t.Error("expected a non-empty generic message")
+	}
+}
+
+func TestRegister_DuplicateEmail_ReturnsGenericResponseAndNotifiesOwner(t *testing.T) {
+	// Regression test for enumeration fix: registering an already-used email
+	// must return the exact same response shape as a genuinely new
+	// registration, and must notify the real owner via a password-reset
+	// email rather than telling the caller the account exists.
+	mdb := &mockDB{
+		registerUserFn: func(_ context.Context, _, _ string) (string, error) {
+			return "", db.ErrUniqueViolation
+		},
+		getUserByEmailFn: func(_ context.Context, email string) (*model.UserInternal, error) {
+			u := testUser()
+			u.Email = email
+			return u, nil
+		},
+		createResetPassTokenFn: func(_ context.Context, _ *model.User) (*model.PasswordResetToken, error) {
+			return &model.PasswordResetToken{Token: "test-reset-token"}, nil
+		},
+	}
+	mail := newRecordingMailSender()
+	srv := newTestServer(mdb, mail)
+	ctx := context.Background()
+
+	resp, err := srv.Register(ctx, &authv1.RegisterRequest{
+		Email:    "existing@example.com",
+		Password: testPassword,
+	})
+	if err != nil {
+		t.Fatalf("Register failed: %v", err)
+	}
+	if resp.UserId != "" {
+		t.Errorf("UserId = %q, want empty", resp.UserId)
+	}
+	const wantMsg = "If this email is eligible for registration, check your inbox to continue."
+	if resp.Message != wantMsg {
+		t.Errorf("Message = %q, want %q", resp.Message, wantMsg)
+	}
+	mail.waitForSend(t)
+}
+
+func TestRegister_InviteOnly_NotInvited_ReturnsGenericResponseWithoutCreatingUser(t *testing.T) {
+	registerCalled := false
+	mdb := &mockDB{
+		isEmailInvitedFn: func(_ context.Context, _ string) (bool, error) {
+			return false, nil
+		},
+		registerUserFn: func(_ context.Context, _, _ string) (string, error) {
+			registerCalled = true
+			return "new-user-id", nil
+		},
+	}
+	srv := NewAuthServer(mdb, log.New(), &noopMailSender{}, "from@example.com",
+		registrationModeInviteOnly, "", "", "", ThrottleConfig{})
+	ctx := context.Background()
+
+	resp, err := srv.Register(ctx, &authv1.RegisterRequest{
+		Email:    "uninvited@example.com",
+		Password: testPassword,
+	})
+	if err != nil {
+		t.Fatalf("Register failed: %v", err)
+	}
+	if resp.UserId != "" {
+		t.Errorf("UserId = %q, want empty", resp.UserId)
+	}
+	const wantMsg = "If this email is eligible for registration, check your inbox to continue."
+	if resp.Message != wantMsg {
+		t.Errorf("Message = %q, want %q (must match the duplicate-email case)", resp.Message, wantMsg)
+	}
+	if registerCalled {
+		t.Error("RegisterUser must not be called for a non-invited email")
+	}
+}
+
+func TestRegister_InviteOnly_Invited_Succeeds(t *testing.T) {
+	consumeInviteCalled := false
+	mdb := &mockDB{
+		isEmailInvitedFn: func(_ context.Context, _ string) (bool, error) {
+			return true, nil
+		},
+		registerUserFn: func(_ context.Context, _, _ string) (string, error) {
+			return "new-user-id", nil
+		},
+		consumeInviteFn: func(_ context.Context, _ string) error {
+			consumeInviteCalled = true
+			return nil
+		},
+	}
+	srv := NewAuthServer(mdb, log.New(), &noopMailSender{}, "from@example.com",
+		registrationModeInviteOnly, "", "", "", ThrottleConfig{})
+	ctx := context.Background()
+
+	resp, err := srv.Register(ctx, &authv1.RegisterRequest{
+		Email:    "invited@example.com",
+		Password: testPassword,
+	})
+	if err != nil {
+		t.Fatalf("Register failed: %v", err)
+	}
+	if resp.UserId != "" {
+		t.Errorf("UserId = %q, want empty", resp.UserId)
+	}
+	if !consumeInviteCalled {
+		t.Error("expected ConsumeInvite to be called after a successful invite-only registration")
 	}
 }
 

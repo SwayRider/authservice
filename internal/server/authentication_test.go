@@ -705,6 +705,8 @@ func TestGetToken_ScopeResolution(t *testing.T) {
 }
 
 func TestGetToken_ClientNotFound(t *testing.T) {
+	// Regression test for enumeration fix: an unknown client_id must be
+	// indistinguishable from a known client_id with a wrong secret.
 	mdb := &mockDB{
 		getServiceClientByIDFn: func(_ context.Context, _ string) (*model.ServiceClientInternal, error) {
 			return nil, db.ErrServiceClientNotFound
@@ -721,8 +723,12 @@ func TestGetToken_ClientNotFound(t *testing.T) {
 		t.Fatal("expected error, got nil")
 	}
 	st, _ := status.FromError(err)
-	if st.Code() != codes.NotFound {
-		t.Errorf("code = %v, want %v", st.Code(), codes.NotFound)
+	if st.Code() != codes.Unauthenticated {
+		t.Errorf("code = %v, want %v", st.Code(), codes.Unauthenticated)
+	}
+	const wantMsg = "service client authentication error"
+	if st.Message() != wantMsg {
+		t.Errorf("message = %q, want %q (must match the wrong-secret case)", st.Message(), wantMsg)
 	}
 }
 

@@ -261,8 +261,8 @@ func (s *AuthServer) GetToken(
 		if errors.Is(err, db.ErrServiceClientNotFound) {
 			s.recordClientAttempt(ctx, req.ClientId, false)
 			return nil, status.Error(
-				codes.NotFound,
-				"service client not found")
+				codes.Unauthenticated,
+				"service client authentication error")
 		}
 		// Infrastructure error -- not recorded, same reasoning as Login.
 		return nil, status.Error(codes.Internal, "internal error")
