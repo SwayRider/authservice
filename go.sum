@@ -206,6 +206,8 @@ github.com/swayrider/swlib v0.1.4 h1:1Hl8VU5Nva7ks+IWa8xoh6p+vhDjCrSXDjmbPS7tYvw
 github.com/swayrider/swlib v0.1.4/go.mod h1:Iv5ojh35cHoGmjNdvPPovW3i8sQBtQXmK9e2rTq4sRc=
 github.com/swayrider/swlib v0.1.5 h1:Fl68c8dbDSQ7aam6baPWmrpZcHz+w/skkn0/tfGm4FY=
 github.com/swayrider/swlib v0.1.5/go.mod h1:Iv5ojh35cHoGmjNdvPPovW3i8sQBtQXmK9e2rTq4sRc=
+github.com/swayrider/swlib v0.1.6-0.20260817100340-1a9c7ced9837 h1:IG6EB6A/ccPPPTyde/qGodF5ZStxgeUom1/xSAnuqew=
+github.com/swayrider/swlib v0.1.6-0.20260817100340-1a9c7ced9837/go.mod h1:A1AD618tw9Xrc9sq0OTcCfFTWsswvRRPygZjOGsaaJA=
 github.com/tv42/httpunix v0.0.0-20150427012821-b75d8614f926/go.mod h1:9ESjWnEqriFuLhtthL60Sar/7RFoluCcXsuvEwTV5KM=
 github.com/wagslane/go-password-validator v0.3.0 h1:vfxOPzGHkz5S146HDpavl0cw1DSVP061Ry2PX0/ON6I=
 github.com/wagslane/go-password-validator v0.3.0/go.mod h1:TI1XJ6T5fRdRnHqHt14pvy1tNVnrwe7m3/f1f2fDphQ=
