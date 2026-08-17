@@ -332,8 +332,8 @@ func dbMaintenance(a app.App) {
 	for {
 		select {
 		case <-ticker.C:
-			if err := dbconn.EnsureKeys(ctx); err != nil {
-				lg.Errorf("failed to ensure keys: %v", err)
+			if err := dbconn.DoDatabaseMaintenance(ctx); err != nil {
+				lg.Errorf("failed to run db maintenance: %v", err)
 			}
 		case <-ctx.Done():
 			lg.Infoln("stopping db maintenance")
