@@ -314,7 +314,7 @@ func (s *AuthServer) Refresh(
 	}
 
 	// Invalidate the old refresh token (rotation)
-	err = s.DB().DeleteRefreshToken(ctx, req.RefreshToken)
+	err = s.DB().DeleteRefreshToken(ctx, refreshToken)
 	if err != nil {
 		lg.Warnf("could not delete refresh token: %v", err)
 	}

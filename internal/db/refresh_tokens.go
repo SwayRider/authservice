@@ -41,9 +41,9 @@ func (d *DB) CreateRefreshToken(
 
 	_, err = d.ExecContext(ctx, `
 		INSERT INTO refresh_tokens
-		(token, user_id, jwtid, valid_until, created_ip, user_agent)
+		(token_hash, user_id, jwtid, valid_until, created_ip, user_agent)
 		VALUES ($1, $2, $3, $4, $5, $6)
-	`, token.Token, token.UserId, token.JwtID, token.ValidUntil, token.Ip, token.UserAgent)
+	`, token.TokenHash, token.UserId, token.JwtID, token.ValidUntil, token.Ip, token.UserAgent)
 	if err != nil {
 		lg.Warnf("CreateRefreshToken: %v", err)
 		return
@@ -65,14 +65,15 @@ func (d *DB) GetRefreshToken(
 		return nil, err
 	}
 
+	hash := model.HashToken(token)
 	var rt model.RefreshToken
 	err := d.QueryRowContext(ctx, `
-		SELECT token, user_id, jwtid, valid_until, created_ip, user_agent FROM refresh_tokens
-		WHERE token = $1
-	`, token).Scan(&rt.Token, &rt.UserId, &rt.JwtID, &rt.ValidUntil, &rt.Ip, &rt.UserAgent)
+		SELECT user_id, jwtid, valid_until, created_ip, user_agent FROM refresh_tokens
+		WHERE token_hash = $1
+	`, hash).Scan(&rt.UserId, &rt.JwtID, &rt.ValidUntil, &rt.Ip, &rt.UserAgent)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			lg.Debugf("no refresh token found: %s", token)
+			lg.Debugf("no refresh token found")
 			return nil, ErrNoRefreshTokenFound
 		}
 		lg.Warnf("GetRefreshToken: %v", err)
@@ -94,10 +95,11 @@ func (d *DB) DeleteRefreshToken(
 		return err
 	}
 
+	hash := model.HashToken(token)
 	_, err := d.ExecContext(ctx, `
 		DELETE FROM refresh_tokens
-		WHERE token = $1
-	`, token)
+		WHERE token_hash = $1
+	`, hash)
 	return err
 }
 

@@ -12,6 +12,7 @@ import (
 	authv1 "github.com/swayrider/protos/auth/v1"
 	"github.com/swayrider/authservice/internal/db"
 	"github.com/swayrider/authservice/internal/model"
+	"github.com/swayrider/swlib/security"
 )
 
 // =============================================================================
@@ -266,6 +267,50 @@ func TestRefresh_Success(t *testing.T) {
 	}
 	if resp.RefreshToken == "" {
 		t.Error("expected non-empty refresh token")
+	}
+}
+
+func TestRefresh_DeletesCookieSourcedToken(t *testing.T) {
+	const cookieToken = "cookie-sourced-refresh-token"
+	var deletedWith string
+
+	mdb := &mockDB{
+		getRefreshTokenFn: func(_ context.Context, token string) (*model.RefreshToken, error) {
+			return &model.RefreshToken{
+				Token:      token,
+				UserId:     "test-user-id",
+				ValidUntil: time.Now().Add(time.Hour),
+			}, nil
+		},
+		deleteRefreshTokenFn: func(_ context.Context, token string) error {
+			deletedWith = token
+			return nil
+		},
+		getUserByIDFn: func(_ context.Context, _ string) (*model.UserInternal, error) {
+			return testUser(), nil
+		},
+		createRefreshTokenFn: func(_ context.Context, user *model.User, _, _, _ string) (*model.RefreshToken, error) {
+			return &model.RefreshToken{
+				Token:      "new-refresh-token",
+				UserId:     user.ID,
+				ValidUntil: time.Now().Add(30 * 24 * time.Hour),
+			}, nil
+		},
+	}
+	srv := newTestServer(mdb, &noopMailSender{})
+
+	// Simulate the cookie-based REST flow: AuthInterceptor populates
+	// security.RefreshKey in the context from the refresh_token cookie.
+	// req.RefreshToken is deliberately empty, as grpc-gateway leaves it
+	// when the client only sends a cookie.
+	ctx := context.WithValue(context.Background(), security.RefreshKey, cookieToken)
+
+	_, err := srv.Refresh(ctx, &authv1.RefreshRequest{RefreshToken: ""})
+	if err != nil {
+		t.Fatalf("Refresh failed: %v", err)
+	}
+	if deletedWith != cookieToken {
+		t.Errorf("DeleteRefreshToken called with %q, want %q", deletedWith, cookieToken)
 	}
 }
 
