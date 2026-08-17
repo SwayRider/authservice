@@ -4,7 +4,8 @@
 // to obtain new access tokens without re-authenticating. Each token is bound to:
 //   - The user who created it
 //   - The JWT ID of the associated access token
-//   - The client's IP address and user agent (for security validation)
+//   - The client's IP address (gateway-resolved; a soft anomaly signal, never
+//     a gate on refresh) and user agent
 //
 // Only one refresh token is allowed per user at a time. Creating a new token
 // automatically invalidates any existing token for that user.

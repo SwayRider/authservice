@@ -180,7 +180,9 @@ func (s *AuthServer) Login(
 
 	origIp, _ := security.GetOrigIp(ctx)
 	userAgent, _ := security.GetUserAgent(ctx)
-	accessToken, refreshToken, err := s.createAuthTokens(ctx, u, origIp, userAgent)
+	// Normalize to a single IP so the stored token binding is unambiguous,
+	// even if the context value is a comma-joined chain.
+	accessToken, refreshToken, err := s.createAuthTokens(ctx, u, model.FirstIP(origIp), userAgent)
 	if err != nil {
 		return nil, err
 	}
@@ -314,7 +316,9 @@ func (s *AuthServer) GetToken(
 //
 // Security validations:
 //   - Token must exist in the database
-//   - Token must be bound to the same IP and user agent (prevents token theft)
+//   - Token must be valid (not revoked/expired) and match the user agent
+//   - The IP is checked as a soft anomaly signal only: a mismatch is logged,
+//     never rejected (mobile clients legitimately change IP between requests)
 //   - Old token is deleted before new tokens are issued
 //
 // Returns:
@@ -328,6 +332,7 @@ func (s *AuthServer) Refresh(
 	// Extract client identifiers for token binding verification
 	origIp, _ := security.GetOrigIp(ctx)
 	userAgent, _ := security.GetUserAgent(ctx)
+	origIp = model.FirstIP(origIp)
 	refreshToken, _ := security.GetRefreshToken(ctx)
 	if refreshToken == "" {
 		refreshToken = req.RefreshToken
@@ -342,13 +347,20 @@ func (s *AuthServer) Refresh(
 			"could not get refresh token")
 	}
 
-	// Verify token binding (IP and user agent)
-	err = token.Verify(origIp, userAgent)
+	// Verify token validity (revoked/expired/user agent). The IP is NOT
+	// gated: mobile clients legitimately change IP between login and
+	// refresh, so a mismatch is logged as an anomaly signal and the refresh
+	// proceeds. The rotated token below is re-bound to the current IP.
+	err = token.Verify(userAgent)
 	if err != nil {
 		lg.Errorf("could not verify refresh token: %v", err)
 		return nil, status.Errorf(
 			codes.Unauthenticated,
 			"could not verify refresh token")
+	}
+	if !token.MatchesIP(origIp) {
+		lg.Warnf("refresh token IP mismatch user=%s stored=%q got=%q",
+			token.UserId, token.Ip, origIp)
 	}
 
 	// Invalidate the old refresh token (rotation)

@@ -1,8 +1,10 @@
 // refresh_token.go defines the refresh token model for session management.
 //
 // Refresh tokens enable the "remember me" functionality by allowing users
-// to obtain new access tokens without re-authenticating. Tokens are bound
-// to the client's IP and user agent for security.
+// to obtain new access tokens without re-authenticating. Tokens store the
+// client's IP (as resolved by the API gateway) and user agent; the IP is a
+// soft anomaly signal (logged on mismatch, never gating refresh) while the
+// user agent is verified when present.
 
 package model
 
@@ -10,7 +12,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
-	"slices"
 	"strings"
 	"time"
 
@@ -63,27 +64,55 @@ func NewRefreshToken(
 		JwtID:      jwtID,
 		ValidUntil: time.Now().Add(ttl),
 		Revoked:    false,
-		Ip:         ip,
+		Ip:         FirstIP(ip),
 		UserAgent:  userAgent,
 	}, nil
 }
 
-// Verify checks if the refresh token is valid for the given client.
-// It validates: not revoked, not expired, IP matches, user agent matches.
-// The IP check supports X-Forwarded-For headers with multiple IPs.
-func (t RefreshToken) Verify(origIp, userAgent string) error {
+// FirstIP returns the first non-empty, whitespace-trimmed entry of a
+// comma-separated IP chain, or "" if the chain is empty. The client IP is
+// always stored as a single IP, never a raw comma-joined X-Forwarded-For
+// value, so that matching at refresh time is unambiguous.
+func FirstIP(chain string) string {
+	for _, part := range strings.Split(chain, ",") {
+		if ip := strings.TrimSpace(part); ip != "" {
+			return ip
+		}
+	}
+	return ""
+}
+
+// Verify checks if the refresh token is still usable for the given client.
+// It validates: not revoked, not expired, user agent matches. The IP is
+// deliberately NOT gated here — it is a soft anomaly signal, compared by the
+// server via MatchesIP and logged on mismatch, never fatal (mobile clients
+// legitimately change IP between login and refresh).
+func (t RefreshToken) Verify(userAgent string) error {
 	if t.Revoked {
 		return errors.New("token is revoked")
 	}
 	if t.ValidUntil.Before(time.Now()) {
 		return errors.New("token is expired")
 	}
-	origIps := strings.Split(origIp, ", ")
-	if !slices.Contains(origIps, t.Ip) {
-		return errors.New("ip does not match")
-	}
 	if t.UserAgent != userAgent {
 		return errors.New("user agent does not match")
 	}
 	return nil
+}
+
+// MatchesIP reports whether the token's bound IP appears in the given
+// comma-separated IP chain (the X-Forwarded-For style value the gateway
+// forwards under x-orig-ip). Tokens stored without an IP — issued on a
+// direct/unbound path, or legacy rows — always match. A mismatch is a soft
+// signal: the caller should log it, not reject the request.
+func (t RefreshToken) MatchesIP(origIp string) bool {
+	if t.Ip == "" {
+		return true
+	}
+	for _, part := range strings.Split(origIp, ",") {
+		if strings.TrimSpace(part) == t.Ip {
+			return true
+		}
+	}
+	return false
 }

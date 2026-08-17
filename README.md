@@ -25,6 +25,8 @@ The following invariants are **non-negotiable**:
 - JWT verification must work across key rotation
 - All protected endpoints are guarded by interceptors
 
+**Refresh-token IP binding is a soft anomaly signal, not a gate.** The client IP is resolved once by the API gateway (which never trusts client-supplied `X-Forwarded-For`), forwarded to this service as `x-orig-ip` gRPC metadata, and stored on the refresh token at login. At refresh the stored IP is compared against the forwarded IP and a mismatch is **logged but never blocks the refresh** — mobile clients legitimately change IP between requests. Client-supplied `X-Forwarded-For` is deliberately **not** honored (the service has no trusted reverse proxy of its own); tokens issued on direct/unauthenticated paths store no IP and never produce a mismatch.
+
 ---
 
 ## Architecture

@@ -203,6 +203,37 @@ func TestLogin_Success(t *testing.T) {
 	}
 }
 
+func TestLogin_StoresNormalizedIP(t *testing.T) {
+	var storedIP string
+	mdb := &mockDB{
+		getUserByEmailFn: func(_ context.Context, _ string) (*model.UserInternal, error) {
+			return testUser(), nil
+		},
+		createRefreshTokenFn: func(_ context.Context, _ *model.User, _, ip, _ string) (*model.RefreshToken, error) {
+			storedIP = ip
+			return &model.RefreshToken{
+				Token:      "test-refresh-token",
+				UserId:     "test-user-id",
+				ValidUntil: time.Now().Add(30 * 24 * time.Hour),
+			}, nil
+		},
+	}
+	srv := newTestServer(mdb, &noopMailSender{})
+	// Simulate a comma-joined chain in the context (defense in depth: the
+	// server must store a single, unambiguous IP).
+	ctx := context.WithValue(context.Background(), security.OrigIpKey, "1.2.3.4, 10.0.0.1")
+
+	if _, err := srv.Login(ctx, &authv1.LoginRequest{
+		Email:    "test@example.com",
+		Password: testPassword,
+	}); err != nil {
+		t.Fatalf("Login failed: %v", err)
+	}
+	if storedIP != "1.2.3.4" {
+		t.Errorf("stored IP = %q, want first chain entry %q", storedIP, "1.2.3.4")
+	}
+}
+
 // =============================================================================
 // Login lockout Tests
 // =============================================================================
@@ -415,7 +446,10 @@ func TestRefresh_TokenNotFound(t *testing.T) {
 	}
 }
 
-func TestRefresh_TokenIPMismatch(t *testing.T) {
+func TestRefresh_IPMismatchSucceeds(t *testing.T) {
+	// Soft gate: an IP mismatch (or a missing IP) is logged as an anomaly
+	// signal but never blocks the refresh — mobile clients legitimately
+	// change IP between login and refresh.
 	mdb := &mockDB{
 		getRefreshTokenFn: func(_ context.Context, _ string) (*model.RefreshToken, error) {
 			return &model.RefreshToken{
@@ -423,22 +457,66 @@ func TestRefresh_TokenIPMismatch(t *testing.T) {
 				UserId:     "user-1",
 				ValidUntil: time.Now().Add(time.Hour),
 				Ip:         "10.0.0.1",
-				UserAgent:  "TestAgent/1.0",
+				UserAgent:  "",
+			}, nil
+		},
+		getUserByIDFn: func(_ context.Context, _ string) (*model.UserInternal, error) {
+			return testUser(), nil
+		},
+		createRefreshTokenFn: func(_ context.Context, user *model.User, _, _, _ string) (*model.RefreshToken, error) {
+			return &model.RefreshToken{
+				Token:      "new-refresh-token",
+				UserId:     user.ID,
+				ValidUntil: time.Now().Add(30 * 24 * time.Hour),
 			}, nil
 		},
 	}
 	srv := newTestServer(mdb, &noopMailSender{})
-	// The context has no IP set, so security.GetOrigIp returns "".
-	// This causes the token Verify to fail (IP mismatch).
+	// The context has no IP at all (security.GetOrigIp returns "") while the
+	// stored token is bound to 10.0.0.1 — a mismatch — yet refresh must succeed.
 	ctx := context.Background()
 
-	_, err := srv.Refresh(ctx, &authv1.RefreshRequest{RefreshToken: "some-token"})
-	if err == nil {
-		t.Fatal("expected error for IP mismatch, got nil")
+	resp, err := srv.Refresh(ctx, &authv1.RefreshRequest{RefreshToken: "some-token"})
+	if err != nil {
+		t.Fatalf("Refresh failed on IP mismatch: %v", err)
 	}
-	st, _ := status.FromError(err)
-	if st.Code() != codes.Unauthenticated {
-		t.Errorf("code = %v, want %v", st.Code(), codes.Unauthenticated)
+	if resp.RefreshToken == "" {
+		t.Error("expected a rotated refresh token")
+	}
+}
+
+func TestRefresh_IPMatchSucceeds(t *testing.T) {
+	// Same request with a matching forwarded IP: refresh succeeds.
+	mdb := &mockDB{
+		getRefreshTokenFn: func(_ context.Context, _ string) (*model.RefreshToken, error) {
+			return &model.RefreshToken{
+				Token:      "some-token",
+				UserId:     "user-1",
+				ValidUntil: time.Now().Add(time.Hour),
+				Ip:         "10.0.0.1",
+				UserAgent:  "",
+			}, nil
+		},
+		getUserByIDFn: func(_ context.Context, _ string) (*model.UserInternal, error) {
+			return testUser(), nil
+		},
+		createRefreshTokenFn: func(_ context.Context, user *model.User, _, _, _ string) (*model.RefreshToken, error) {
+			return &model.RefreshToken{
+				Token:      "new-refresh-token",
+				UserId:     user.ID,
+				ValidUntil: time.Now().Add(30 * 24 * time.Hour),
+			}, nil
+		},
+	}
+	srv := newTestServer(mdb, &noopMailSender{})
+	ctx := context.WithValue(context.Background(), security.OrigIpKey, "10.0.0.1")
+
+	resp, err := srv.Refresh(ctx, &authv1.RefreshRequest{RefreshToken: "some-token"})
+	if err != nil {
+		t.Fatalf("Refresh failed: %v", err)
+	}
+	if resp.RefreshToken == "" {
+		t.Error("expected a rotated refresh token")
 	}
 }
 
