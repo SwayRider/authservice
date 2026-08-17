@@ -10,4 +10,5 @@ rest/
 
 .DS_Store
 
-CODE_REVIEW_2026-08.md
+# Code review reports
+CODE_REVIEW*.md
