@@ -99,38 +99,39 @@ func (n *noopMailSender) SendTemplateInternal(_ *mailclient.TemplateMail) (strin
 // =============================================================================
 
 type mockDB struct {
-	adminExistsFn             func(ctx context.Context) (bool, error)
-	createAdminUserFn         func(ctx context.Context, email, hashedPassword string) (string, error)
-	registerUserFn            func(ctx context.Context, email, hashedPassword string) (string, error)
-	getUserByEmailFn          func(ctx context.Context, email string) (*model.UserInternal, error)
-	getUserByIDFn             func(ctx context.Context, id string) (*model.UserInternal, error)
-	markUserVerifiedFn        func(ctx context.Context, userId string) error
-	updatePasswordFn          func(ctx context.Context, userId, hashedPassword string) error
-	changeAccountLevelFn      func(ctx context.Context, userId, accountLevel string) error
-	createRefreshTokenFn      func(ctx context.Context, user *model.User, jwtID, ip, userAgent string) (*model.RefreshToken, error)
-	getRefreshTokenFn         func(ctx context.Context, token string) (*model.RefreshToken, error)
-	deleteRefreshTokenFn      func(ctx context.Context, token string) error
-	createVerificationTokenFn func(ctx context.Context, user *model.User) (*model.VerificationToken, error)
-	getVerificationTokenFn    func(ctx context.Context, user *model.User) (*model.VerificationToken, error)
-	deleteVerificationTokenFn func(ctx context.Context, userId string) error
-	createResetPassTokenFn    func(ctx context.Context, user *model.User) (*model.PasswordResetToken, error)
-	getResetPassTokenFn       func(ctx context.Context, user *model.User) (*model.PasswordResetToken, error)
-	deleteResetPassTokenFn    func(ctx context.Context, userId string) error
-	getSigningKeyFn           func(ctx context.Context) (string, error)
-	getVerificationKeysFn     func(ctx context.Context) ([]string, error)
-	createServiceClientFn     func(ctx context.Context, name, description string, scopes []string, secretHash string) (string, error)
-	deleteServiceClientFn     func(ctx context.Context, clientId string) error
-	getServiceClientByIDFn    func(ctx context.Context, clientID string) (*model.ServiceClientInternal, error)
-	countServiceClientsFn     func(ctx context.Context) (int, error)
-	listServiceClientsFn      func(ctx context.Context, page, pageSize int) ([]model.ServiceClient, error)
-	createInviteFn            func(ctx context.Context, email string) (string, error)
-	deleteInviteFn            func(ctx context.Context, email string) error
-	consumeInviteFn           func(ctx context.Context, email string) error
-	reInviteFn                func(ctx context.Context, email string) error
-	getInviteByEmailFn        func(ctx context.Context, email string) (*model.Invite, error)
-	isEmailInvitedFn          func(ctx context.Context, email string) (bool, error)
-	countInvitesFn            func(ctx context.Context, registered *bool) (int, error)
-	listInvitesFn             func(ctx context.Context, page, pageSize int, registered *bool) ([]model.Invite, error)
+	adminExistsFn                 func(ctx context.Context) (bool, error)
+	createAdminUserFn             func(ctx context.Context, email, hashedPassword string) (string, error)
+	registerUserFn                func(ctx context.Context, email, hashedPassword string) (string, error)
+	getUserByEmailFn              func(ctx context.Context, email string) (*model.UserInternal, error)
+	getUserByIDFn                 func(ctx context.Context, id string) (*model.UserInternal, error)
+	markUserVerifiedFn            func(ctx context.Context, userId string) error
+	updatePasswordFn              func(ctx context.Context, userId, hashedPassword string) error
+	changeAccountLevelFn          func(ctx context.Context, userId, accountLevel string) error
+	createRefreshTokenFn          func(ctx context.Context, user *model.User, jwtID, ip, userAgent string) (*model.RefreshToken, error)
+	getRefreshTokenFn             func(ctx context.Context, token string) (*model.RefreshToken, error)
+	deleteRefreshTokenFn          func(ctx context.Context, token string) error
+	deleteRefreshTokensByUserIDFn func(ctx context.Context, userId string) error
+	createVerificationTokenFn     func(ctx context.Context, user *model.User) (*model.VerificationToken, error)
+	getVerificationTokenFn        func(ctx context.Context, user *model.User) (*model.VerificationToken, error)
+	deleteVerificationTokenFn     func(ctx context.Context, userId string) error
+	createResetPassTokenFn        func(ctx context.Context, user *model.User) (*model.PasswordResetToken, error)
+	getResetPassTokenFn           func(ctx context.Context, user *model.User) (*model.PasswordResetToken, error)
+	deleteResetPassTokenFn        func(ctx context.Context, userId string) error
+	getSigningKeyFn               func(ctx context.Context) (string, error)
+	getVerificationKeysFn         func(ctx context.Context) ([]string, error)
+	createServiceClientFn         func(ctx context.Context, name, description string, scopes []string, secretHash string) (string, error)
+	deleteServiceClientFn         func(ctx context.Context, clientId string) error
+	getServiceClientByIDFn        func(ctx context.Context, clientID string) (*model.ServiceClientInternal, error)
+	countServiceClientsFn         func(ctx context.Context) (int, error)
+	listServiceClientsFn          func(ctx context.Context, page, pageSize int) ([]model.ServiceClient, error)
+	createInviteFn                func(ctx context.Context, email string) (string, error)
+	deleteInviteFn                func(ctx context.Context, email string) error
+	consumeInviteFn               func(ctx context.Context, email string) error
+	reInviteFn                    func(ctx context.Context, email string) error
+	getInviteByEmailFn            func(ctx context.Context, email string) (*model.Invite, error)
+	isEmailInvitedFn              func(ctx context.Context, email string) (bool, error)
+	countInvitesFn                func(ctx context.Context, registered *bool) (int, error)
+	listInvitesFn                 func(ctx context.Context, page, pageSize int, registered *bool) ([]model.Invite, error)
 }
 
 func (m *mockDB) AdminExists(ctx context.Context) (bool, error) {
@@ -196,6 +197,12 @@ func (m *mockDB) GetRefreshToken(ctx context.Context, token string) (*model.Refr
 func (m *mockDB) DeleteRefreshToken(ctx context.Context, token string) error {
 	if m.deleteRefreshTokenFn != nil {
 		return m.deleteRefreshTokenFn(ctx, token)
+	}
+	return nil
+}
+func (m *mockDB) DeleteRefreshTokensByUserID(ctx context.Context, userId string) error {
+	if m.deleteRefreshTokensByUserIDFn != nil {
+		return m.deleteRefreshTokensByUserIDFn(ctx, userId)
 	}
 	return nil
 }
