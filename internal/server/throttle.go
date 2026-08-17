@@ -16,13 +16,16 @@ import (
 // "disabled", so callers that don't explicitly configure throttling (e.g.
 // existing tests via newTestServer) are unaffected.
 type ThrottleConfig struct {
-	LoginMaxAttempts      int
-	LoginWindow           time.Duration
-	LoginLockoutDuration  time.Duration
-	ClientMaxAttempts     int
-	ClientWindow          time.Duration
-	ClientLockoutDuration time.Duration
-	EmailCooldown         time.Duration
+	LoginMaxAttempts       int
+	LoginWindow            time.Duration
+	LoginLockoutDuration   time.Duration
+	ClientMaxAttempts      int
+	ClientWindow           time.Duration
+	ClientLockoutDuration  time.Duration
+	EmailCooldown          time.Duration
+	EmailIPMaxAttempts     int
+	EmailIPWindow          time.Duration
+	EmailIPLockoutDuration time.Duration
 }
 
 // normalizeIdentifier canonicalizes a user-supplied email for use as a
@@ -73,4 +76,18 @@ func (s *AuthServer) tryConsumeEmailCooldown(ctx context.Context, scope db.Throt
 		return true
 	}
 	return allow
+}
+
+// recordEmailSendAttempt records an attempt to send mail from callerIP
+// against the configured per-IP thresholds (shared across VerifyEmail,
+// RequestPasswordReset, and Register's mail-triggering branches, so an
+// attacker can't reset the budget by alternating endpoints or varying the
+// target address). There's no legitimate-success concept here (unlike
+// Login/GetToken) -- every call to a mail-triggering endpoint consumes
+// budget, so this always records as a "failure" to increment the counter.
+func (s *AuthServer) recordEmailSendAttempt(ctx context.Context, callerIP string) {
+	if err := s.DB().RecordAttemptResult(ctx, db.ScopeEmailSendByIP, callerIP, false,
+		s.throttle.EmailIPMaxAttempts, s.throttle.EmailIPWindow, s.throttle.EmailIPLockoutDuration); err != nil {
+		s.Logger().Warnf("recordEmailSendAttempt: %v", err)
+	}
 }

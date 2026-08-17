@@ -9,6 +9,7 @@ import (
 	"github.com/swayrider/authservice/internal/model"
 	authv1 "github.com/swayrider/protos/auth/v1"
 	log "github.com/swayrider/swlib/logger"
+	"github.com/swayrider/swlib/security"
 )
 
 // =============================================================================
@@ -103,6 +104,77 @@ func TestRegister_UsesEmailVerificationScope(t *testing.T) {
 	}
 	if gotIdentifier != "new@example.com" {
 		t.Errorf("identifier = %q, want normalized %q", gotIdentifier, "new@example.com")
+	}
+}
+
+// =============================================================================
+// Register per-IP email-send throttle Tests
+// =============================================================================
+
+func TestRegister_IPLocked_StillCreatesAccountButSkipsSend(t *testing.T) {
+	registerCalled := false
+	mdb := &mockDB{
+		isAttemptLockedFn: func(_ context.Context, scope db.ThrottleScope, identifier string) (bool, error) {
+			if scope != db.ScopeEmailSendByIP || identifier != "10.0.0.1" {
+				t.Errorf("unexpected scope/identifier: %v/%s", scope, identifier)
+			}
+			return true, nil
+		},
+		registerUserFn: func(_ context.Context, _, _ string) (string, error) {
+			registerCalled = true
+			return "new-user-id", nil
+		},
+	}
+	mail := newRecordingMailSender()
+	srv := newTestServerWithThrottle(mdb, mail, testThrottleConfig())
+	ctx := context.WithValue(context.Background(), security.OrigIpKey, "10.0.0.1")
+
+	resp, err := srv.Register(ctx, &authv1.RegisterRequest{
+		Email:    "new@example.com",
+		Password: testPassword,
+	})
+	if err != nil {
+		t.Fatalf("Register failed: %v", err)
+	}
+	if resp.UserId != "" {
+		t.Errorf("UserId = %q, want empty", resp.UserId)
+	}
+	if !registerCalled {
+		t.Error("expected RegisterUser to be called even when the caller IP is locked out")
+	}
+	mail.assertNoSend(t)
+}
+
+func TestRegister_UsesEmailSendByIPScope(t *testing.T) {
+	var gotScope db.ThrottleScope
+	var gotIdentifier string
+	mdb := &mockDB{
+		registerUserFn: func(_ context.Context, _, _ string) (string, error) {
+			return "new-user-id", nil
+		},
+		recordAttemptResultFn: func(_ context.Context, scope db.ThrottleScope, identifier string, success bool, _ int, _, _ time.Duration) error {
+			gotScope = scope
+			gotIdentifier = identifier
+			if success {
+				t.Error("expected the per-IP attempt to be recorded as a failure-shaped increment")
+			}
+			return nil
+		},
+	}
+	srv := newTestServerWithThrottle(mdb, &noopMailSender{}, testThrottleConfig())
+	ctx := context.WithValue(context.Background(), security.OrigIpKey, "10.0.0.1")
+
+	if _, err := srv.Register(ctx, &authv1.RegisterRequest{
+		Email:    "new@example.com",
+		Password: testPassword,
+	}); err != nil {
+		t.Fatalf("Register failed: %v", err)
+	}
+	if gotScope != db.ScopeEmailSendByIP {
+		t.Errorf("scope = %v, want %v", gotScope, db.ScopeEmailSendByIP)
+	}
+	if gotIdentifier != "10.0.0.1" {
+		t.Errorf("identifier = %q, want %q", gotIdentifier, "10.0.0.1")
 	}
 }
 
@@ -281,6 +353,53 @@ func TestVerifyEmail_CooldownElapsed_Sends(t *testing.T) {
 		t.Fatalf("VerifyEmail failed: %v", err)
 	}
 	mail.waitForSend(t)
+}
+
+func TestVerifyEmail_IPLocked_SkipsSend(t *testing.T) {
+	mdb := &mockDB{
+		isAttemptLockedFn: func(_ context.Context, scope db.ThrottleScope, identifier string) (bool, error) {
+			if scope != db.ScopeEmailSendByIP || identifier != "10.0.0.1" {
+				t.Errorf("unexpected scope/identifier: %v/%s", scope, identifier)
+			}
+			return true, nil
+		},
+	}
+	mail := newRecordingMailSender()
+	srv := newTestServerWithThrottle(mdb, mail, testThrottleConfig())
+	ctx := context.WithValue(context.Background(), security.OrigIpKey, "10.0.0.1")
+
+	resp, err := srv.VerifyEmail(ctx, &authv1.VerifyEmailRequest{Email: "test@example.com"})
+	if err != nil {
+		t.Fatalf("VerifyEmail failed: %v", err)
+	}
+	if resp == nil {
+		t.Fatal("expected non-nil response")
+	}
+	mail.assertNoSend(t)
+}
+
+func TestVerifyEmail_UsesEmailSendByIPScope(t *testing.T) {
+	var gotScope db.ThrottleScope
+	var gotIdentifier string
+	mdb := &mockDB{
+		recordAttemptResultFn: func(_ context.Context, scope db.ThrottleScope, identifier string, _ bool, _ int, _, _ time.Duration) error {
+			gotScope = scope
+			gotIdentifier = identifier
+			return nil
+		},
+	}
+	srv := newTestServerWithThrottle(mdb, &noopMailSender{}, testThrottleConfig())
+	ctx := context.WithValue(context.Background(), security.OrigIpKey, "10.0.0.1")
+
+	if _, err := srv.VerifyEmail(ctx, &authv1.VerifyEmailRequest{Email: "test@example.com"}); err != nil {
+		t.Fatalf("VerifyEmail failed: %v", err)
+	}
+	if gotScope != db.ScopeEmailSendByIP {
+		t.Errorf("scope = %v, want %v", gotScope, db.ScopeEmailSendByIP)
+	}
+	if gotIdentifier != "10.0.0.1" {
+		t.Errorf("identifier = %q, want %q", gotIdentifier, "10.0.0.1")
+	}
 }
 
 func TestVerifyEmail_UsesEmailVerificationScope(t *testing.T) {

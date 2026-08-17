@@ -240,13 +240,16 @@ func TestLogin_StoresNormalizedIP(t *testing.T) {
 
 func testThrottleConfig() ThrottleConfig {
 	return ThrottleConfig{
-		LoginMaxAttempts:      5,
-		LoginWindow:           15 * time.Minute,
-		LoginLockoutDuration:  15 * time.Minute,
-		ClientMaxAttempts:     5,
-		ClientWindow:          15 * time.Minute,
-		ClientLockoutDuration: 15 * time.Minute,
-		EmailCooldown:         60 * time.Second,
+		LoginMaxAttempts:       5,
+		LoginWindow:            15 * time.Minute,
+		LoginLockoutDuration:   15 * time.Minute,
+		ClientMaxAttempts:      5,
+		ClientWindow:           15 * time.Minute,
+		ClientLockoutDuration:  15 * time.Minute,
+		EmailCooldown:          60 * time.Second,
+		EmailIPMaxAttempts:     20,
+		EmailIPWindow:          15 * time.Minute,
+		EmailIPLockoutDuration: 15 * time.Minute,
 	}
 }
 

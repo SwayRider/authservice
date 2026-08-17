@@ -20,6 +20,7 @@ import (
 	authv1 "github.com/swayrider/protos/auth/v1"
 	"github.com/swayrider/swlib/crypto"
 	log "github.com/swayrider/swlib/logger"
+	"github.com/swayrider/swlib/security"
 	passwordvalidator "github.com/wagslane/go-password-validator"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -38,10 +39,20 @@ func (s *AuthServer) RequestPasswordReset(
 	if resetUrl == "" {
 		resetUrl = s.resetPasswordUrl
 	}
-	// Cooldown check runs synchronously; the response stays unconditionally
-	// generic either way -- only the send is skipped.
-	if s.tryConsumeEmailCooldown(ctx, db.ScopeEmailPasswordReset, normalizeIdentifier(req.Email)) {
-		go s.sendPasswordResetEmail("", req.Email, resetUrl)
+
+	// Per-source-IP budget (shared with Register/VerifyEmail via
+	// db.ScopeEmailSendByIP) on top of the per-address cooldown below: the
+	// cooldown alone doesn't stop an attacker cycling through many distinct
+	// target addresses.
+	origIp, _ := security.GetOrigIp(ctx)
+	callerIP := model.FirstIP(origIp)
+	if !s.isLocked(ctx, db.ScopeEmailSendByIP, callerIP) {
+		s.recordEmailSendAttempt(ctx, callerIP)
+		// Cooldown check runs synchronously; the response stays
+		// unconditionally generic either way -- only the send is skipped.
+		if s.tryConsumeEmailCooldown(ctx, db.ScopeEmailPasswordReset, normalizeIdentifier(req.Email)) {
+			go s.sendPasswordResetEmail("", req.Email, resetUrl)
+		}
 	}
 	return &authv1.RequestPasswordResetResponse{}, nil
 }
