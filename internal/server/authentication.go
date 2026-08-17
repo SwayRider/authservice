@@ -131,6 +131,7 @@ func (s *AuthServer) Login(
 				codes.Unauthenticated,
 				"invalid email or password")
 		}
+		return nil, status.Error(codes.Internal, "internal error")
 	}
 
 	if !u.PasswordHash.Valid {
@@ -231,6 +232,7 @@ func (s *AuthServer) GetToken(
 				codes.NotFound,
 				"service client not found")
 		}
+		return nil, status.Error(codes.Internal, "internal error")
 	}
 
 	if !clnt.ClientSecretHash.Valid {
