@@ -16,6 +16,7 @@ import (
 
 	"github.com/swayrider/authservice/internal/db"
 	"github.com/swayrider/authservice/internal/model"
+	"github.com/swayrider/authservice/internal/svctoken"
 	"github.com/swayrider/grpcclients/mailclient"
 	authv1 "github.com/swayrider/protos/auth/v1"
 	"github.com/swayrider/swlib/crypto"
@@ -187,8 +188,15 @@ func (s *AuthServer) sendPasswordResetEmail(
 		return
 	}
 
+	svcToken, err := svctoken.MailSendToken(ctx, s.DB())
+	if err != nil {
+		lg.Errorf("failed to mint mail service token: %v", err)
+		return
+	}
+
 	// Send the reset email via mailservice
-	_, err = s.mailClient.SendTemplateInternal(
+	_, err = s.mailClient.SendTemplate(
+		svcToken,
 		s.resetPasswordEmailTemplate(
 			s.mailerAddress,
 			user.Email,

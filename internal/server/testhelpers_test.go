@@ -97,7 +97,7 @@ func newTestServerWithThrottle(d Database, m MailSender, throttle ThrottleConfig
 
 type noopMailSender struct{}
 
-func (n *noopMailSender) SendTemplateInternal(_ *mailclient.TemplateMail) (string, error) {
+func (n *noopMailSender) SendTemplate(_ string, _ *mailclient.TemplateMail) (string, error) {
 	return "", nil
 }
 
@@ -112,7 +112,7 @@ func newRecordingMailSender() *recordingMailSender {
 	return &recordingMailSender{calls: make(chan *mailclient.TemplateMail, 10)}
 }
 
-func (r *recordingMailSender) SendTemplateInternal(m *mailclient.TemplateMail) (string, error) {
+func (r *recordingMailSender) SendTemplate(_ string, m *mailclient.TemplateMail) (string, error) {
 	r.calls <- m
 	return "", nil
 }
