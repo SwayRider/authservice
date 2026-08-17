@@ -128,29 +128,38 @@ const (
 	DefVerificationUrl  = ""
 	DefResetPasswordUrl = ""
 
-	FldLoginLockoutThreshold     = "login-lockout-threshold"
-	FldLoginLockoutWindowSecs    = "login-lockout-window-secs"
-	FldLoginLockoutDurationSecs  = "login-lockout-duration-secs"
-	FldClientLockoutThreshold    = "client-lockout-threshold"
-	FldClientLockoutWindowSecs   = "client-lockout-window-secs"
-	FldClientLockoutDurationSecs = "client-lockout-duration-secs"
-	FldEmailCooldownSecs         = "email-cooldown-secs"
+	FldLoginLockoutThreshold      = "login-lockout-threshold"
+	FldLoginLockoutWindowSecs     = "login-lockout-window-secs"
+	FldLoginLockoutDurationSecs   = "login-lockout-duration-secs"
+	FldClientLockoutThreshold     = "client-lockout-threshold"
+	FldClientLockoutWindowSecs    = "client-lockout-window-secs"
+	FldClientLockoutDurationSecs  = "client-lockout-duration-secs"
+	FldEmailCooldownSecs          = "email-cooldown-secs"
+	FldEmailIPMaxAttempts         = "email-ip-max-attempts"
+	FldEmailIPWindowSecs          = "email-ip-window-secs"
+	FldEmailIPLockoutDurationSecs = "email-ip-lockout-duration-secs"
 
-	EnvLoginLockoutThreshold     = "LOGIN_LOCKOUT_THRESHOLD"
-	EnvLoginLockoutWindowSecs    = "LOGIN_LOCKOUT_WINDOW_SECS"
-	EnvLoginLockoutDurationSecs  = "LOGIN_LOCKOUT_DURATION_SECS"
-	EnvClientLockoutThreshold    = "CLIENT_LOCKOUT_THRESHOLD"
-	EnvClientLockoutWindowSecs   = "CLIENT_LOCKOUT_WINDOW_SECS"
-	EnvClientLockoutDurationSecs = "CLIENT_LOCKOUT_DURATION_SECS"
-	EnvEmailCooldownSecs         = "EMAIL_COOLDOWN_SECS"
+	EnvLoginLockoutThreshold      = "LOGIN_LOCKOUT_THRESHOLD"
+	EnvLoginLockoutWindowSecs     = "LOGIN_LOCKOUT_WINDOW_SECS"
+	EnvLoginLockoutDurationSecs   = "LOGIN_LOCKOUT_DURATION_SECS"
+	EnvClientLockoutThreshold     = "CLIENT_LOCKOUT_THRESHOLD"
+	EnvClientLockoutWindowSecs    = "CLIENT_LOCKOUT_WINDOW_SECS"
+	EnvClientLockoutDurationSecs  = "CLIENT_LOCKOUT_DURATION_SECS"
+	EnvEmailCooldownSecs          = "EMAIL_COOLDOWN_SECS"
+	EnvEmailIPMaxAttempts         = "EMAIL_IP_MAX_ATTEMPTS"
+	EnvEmailIPWindowSecs          = "EMAIL_IP_WINDOW_SECS"
+	EnvEmailIPLockoutDurationSecs = "EMAIL_IP_LOCKOUT_DURATION_SECS"
 
-	DefLoginLockoutThreshold     = 5
-	DefLoginLockoutWindowSecs    = 900
-	DefLoginLockoutDurationSecs  = 900
-	DefClientLockoutThreshold    = 5
-	DefClientLockoutWindowSecs   = 900
-	DefClientLockoutDurationSecs = 900
-	DefEmailCooldownSecs         = 60
+	DefLoginLockoutThreshold      = 5
+	DefLoginLockoutWindowSecs     = 900
+	DefLoginLockoutDurationSecs   = 900
+	DefClientLockoutThreshold     = 5
+	DefClientLockoutWindowSecs    = 900
+	DefClientLockoutDurationSecs  = 900
+	DefEmailCooldownSecs          = 60
+	DefEmailIPMaxAttempts         = 20
+	DefEmailIPWindowSecs          = 900
+	DefEmailIPLockoutDurationSecs = 900
 
 	FldRateLimitRPS         = "rate-limit-rps"
 	FldRateLimitBurst       = "rate-limit-burst"
@@ -223,6 +232,15 @@ func main() {
 			app.NewIntConfigField(
 				FldEmailCooldownSecs, EnvEmailCooldownSecs,
 				"Minimum seconds between outbound verification/reset emails to the same address", DefEmailCooldownSecs),
+			app.NewIntConfigField(
+				FldEmailIPMaxAttempts, EnvEmailIPMaxAttempts,
+				"Outbound verification/reset emails allowed per source IP before it is locked out (defense-in-depth against spraying many distinct addresses)", DefEmailIPMaxAttempts),
+			app.NewIntConfigField(
+				FldEmailIPWindowSecs, EnvEmailIPWindowSecs,
+				"Sliding window (seconds) over which per-IP outbound email attempts are counted", DefEmailIPWindowSecs),
+			app.NewIntConfigField(
+				FldEmailIPLockoutDurationSecs, EnvEmailIPLockoutDurationSecs,
+				"Lockout duration (seconds) once the per-IP outbound email threshold is reached", DefEmailIPLockoutDurationSecs),
 			app.NewIntConfigField(
 				FldRateLimitRPS, EnvRateLimitRPS,
 				"Sustained requests/sec allowed per peer IP on the raw gRPC port (coarse fallback safety net)", DefRateLimitRPS),
@@ -482,13 +500,16 @@ func grpcAuthRegistrar(r grpc.ServiceRegistrar, a app.App) {
 	}
 
 	throttle := server.ThrottleConfig{
-		LoginMaxAttempts:      app.GetConfigField[int](a.Config(), FldLoginLockoutThreshold),
-		LoginWindow:           time.Duration(app.GetConfigField[int](a.Config(), FldLoginLockoutWindowSecs)) * time.Second,
-		LoginLockoutDuration:  time.Duration(app.GetConfigField[int](a.Config(), FldLoginLockoutDurationSecs)) * time.Second,
-		ClientMaxAttempts:     app.GetConfigField[int](a.Config(), FldClientLockoutThreshold),
-		ClientWindow:          time.Duration(app.GetConfigField[int](a.Config(), FldClientLockoutWindowSecs)) * time.Second,
-		ClientLockoutDuration: time.Duration(app.GetConfigField[int](a.Config(), FldClientLockoutDurationSecs)) * time.Second,
-		EmailCooldown:         time.Duration(app.GetConfigField[int](a.Config(), FldEmailCooldownSecs)) * time.Second,
+		LoginMaxAttempts:       app.GetConfigField[int](a.Config(), FldLoginLockoutThreshold),
+		LoginWindow:            time.Duration(app.GetConfigField[int](a.Config(), FldLoginLockoutWindowSecs)) * time.Second,
+		LoginLockoutDuration:   time.Duration(app.GetConfigField[int](a.Config(), FldLoginLockoutDurationSecs)) * time.Second,
+		ClientMaxAttempts:      app.GetConfigField[int](a.Config(), FldClientLockoutThreshold),
+		ClientWindow:           time.Duration(app.GetConfigField[int](a.Config(), FldClientLockoutWindowSecs)) * time.Second,
+		ClientLockoutDuration:  time.Duration(app.GetConfigField[int](a.Config(), FldClientLockoutDurationSecs)) * time.Second,
+		EmailCooldown:          time.Duration(app.GetConfigField[int](a.Config(), FldEmailCooldownSecs)) * time.Second,
+		EmailIPMaxAttempts:     app.GetConfigField[int](a.Config(), FldEmailIPMaxAttempts),
+		EmailIPWindow:          time.Duration(app.GetConfigField[int](a.Config(), FldEmailIPWindowSecs)) * time.Second,
+		EmailIPLockoutDuration: time.Duration(app.GetConfigField[int](a.Config(), FldEmailIPLockoutDurationSecs)) * time.Second,
 	}
 
 	srv := server.NewAuthServer(

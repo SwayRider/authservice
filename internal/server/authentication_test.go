@@ -4,6 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -53,6 +56,9 @@ func TestCookieHeaderMatcher(t *testing.T) {
 		{"cookie", "cookie", true},
 		{"Cookie", "cookie", true},
 		{"COOKIE", "cookie", true},
+		{"x-forwarded-proto", "x-forwarded-proto", true},
+		{"X-Forwarded-Proto", "x-forwarded-proto", true},
+		{"X-FORWARDED-PROTO", "x-forwarded-proto", true},
 	}
 
 	for _, tt := range tests {
@@ -75,6 +81,53 @@ func TestCookieHeaderMatcher_NonCookieHeader(t *testing.T) {
 	// The runtime default matcher returns false for arbitrary non-standard headers —
 	// we just verify the call doesn't panic and returns a consistent result.
 	_ = ok
+}
+
+// =============================================================================
+// CookieForwarder Tests
+// =============================================================================
+
+func TestCookieForwarder_SetsSecureFromContext(t *testing.T) {
+	ctx := context.WithValue(context.Background(), security.SecureKey, true)
+	w := httptest.NewRecorder()
+
+	if err := CookieForwarder(ctx, w, &authv1.LoginResponse{RefreshToken: "test-refresh-token"}); err != nil {
+		t.Fatalf("CookieForwarder failed: %v", err)
+	}
+
+	cookie := findSetCookie(t, w, "refresh_token")
+	if !cookie.Secure {
+		t.Error("Secure = false, want true when security.SecureKey is true in context")
+	}
+}
+
+func TestCookieForwarder_DefaultsInsecureWithoutSignal(t *testing.T) {
+	ctx := context.Background()
+	w := httptest.NewRecorder()
+
+	if err := CookieForwarder(ctx, w, &authv1.LoginResponse{RefreshToken: "test-refresh-token"}); err != nil {
+		t.Fatalf("CookieForwarder failed: %v", err)
+	}
+
+	cookie := findSetCookie(t, w, "refresh_token")
+	if cookie.Secure {
+		t.Error("Secure = true, want false when no security.SecureKey is present (e.g. direct HTTP debugging)")
+	}
+}
+
+// findSetCookie locates a Set-Cookie header on the recorder matching name
+// (accounting for the configured cookie namespace prefix) and fails the test
+// if it's not found.
+func findSetCookie(t *testing.T, w *httptest.ResponseRecorder, name string) *http.Cookie {
+	t.Helper()
+	resp := w.Result()
+	for _, c := range resp.Cookies() {
+		if strings.HasSuffix(c.Name, name) {
+			return c
+		}
+	}
+	t.Fatalf("no Set-Cookie found matching %q; got %v", name, resp.Header["Set-Cookie"])
+	return nil
 }
 
 // =============================================================================
@@ -240,13 +293,16 @@ func TestLogin_StoresNormalizedIP(t *testing.T) {
 
 func testThrottleConfig() ThrottleConfig {
 	return ThrottleConfig{
-		LoginMaxAttempts:      5,
-		LoginWindow:           15 * time.Minute,
-		LoginLockoutDuration:  15 * time.Minute,
-		ClientMaxAttempts:     5,
-		ClientWindow:          15 * time.Minute,
-		ClientLockoutDuration: 15 * time.Minute,
-		EmailCooldown:         60 * time.Second,
+		LoginMaxAttempts:       5,
+		LoginWindow:            15 * time.Minute,
+		LoginLockoutDuration:   15 * time.Minute,
+		ClientMaxAttempts:      5,
+		ClientWindow:           15 * time.Minute,
+		ClientLockoutDuration:  15 * time.Minute,
+		EmailCooldown:          60 * time.Second,
+		EmailIPMaxAttempts:     20,
+		EmailIPWindow:          15 * time.Minute,
+		EmailIPLockoutDuration: 15 * time.Minute,
 	}
 }
 
@@ -429,7 +485,7 @@ func TestLogin_RecordsSuccessOnCorrectCredentials(t *testing.T) {
 
 func TestRefresh_TokenNotFound(t *testing.T) {
 	mdb := &mockDB{
-		getRefreshTokenFn: func(_ context.Context, _ string) (*model.RefreshToken, error) {
+		consumeRefreshTokenFn: func(_ context.Context, _ string) (*model.RefreshToken, error) {
 			return nil, errors.New("token not found")
 		},
 	}
@@ -451,7 +507,7 @@ func TestRefresh_IPMismatchSucceeds(t *testing.T) {
 	// signal but never blocks the refresh — mobile clients legitimately
 	// change IP between login and refresh.
 	mdb := &mockDB{
-		getRefreshTokenFn: func(_ context.Context, _ string) (*model.RefreshToken, error) {
+		consumeRefreshTokenFn: func(_ context.Context, _ string) (*model.RefreshToken, error) {
 			return &model.RefreshToken{
 				Token:      "some-token",
 				UserId:     "user-1",
@@ -488,7 +544,7 @@ func TestRefresh_IPMismatchSucceeds(t *testing.T) {
 func TestRefresh_IPMatchSucceeds(t *testing.T) {
 	// Same request with a matching forwarded IP: refresh succeeds.
 	mdb := &mockDB{
-		getRefreshTokenFn: func(_ context.Context, _ string) (*model.RefreshToken, error) {
+		consumeRefreshTokenFn: func(_ context.Context, _ string) (*model.RefreshToken, error) {
 			return &model.RefreshToken{
 				Token:      "some-token",
 				UserId:     "user-1",
@@ -524,7 +580,7 @@ func TestRefresh_Success(t *testing.T) {
 	const storedToken = "valid-refresh-token"
 	// The token must have empty IP and UA to match the context (which also returns "").
 	mdb := &mockDB{
-		getRefreshTokenFn: func(_ context.Context, _ string) (*model.RefreshToken, error) {
+		consumeRefreshTokenFn: func(_ context.Context, _ string) (*model.RefreshToken, error) {
 			return &model.RefreshToken{
 				Token:      storedToken,
 				UserId:     "test-user-id",
@@ -561,19 +617,16 @@ func TestRefresh_Success(t *testing.T) {
 
 func TestRefresh_DeletesCookieSourcedToken(t *testing.T) {
 	const cookieToken = "cookie-sourced-refresh-token"
-	var deletedWith string
+	var consumedWith string
 
 	mdb := &mockDB{
-		getRefreshTokenFn: func(_ context.Context, token string) (*model.RefreshToken, error) {
+		consumeRefreshTokenFn: func(_ context.Context, token string) (*model.RefreshToken, error) {
+			consumedWith = token
 			return &model.RefreshToken{
 				Token:      token,
 				UserId:     "test-user-id",
 				ValidUntil: time.Now().Add(time.Hour),
 			}, nil
-		},
-		deleteRefreshTokenFn: func(_ context.Context, token string) error {
-			deletedWith = token
-			return nil
 		},
 		getUserByIDFn: func(_ context.Context, _ string) (*model.UserInternal, error) {
 			return testUser(), nil
@@ -598,8 +651,40 @@ func TestRefresh_DeletesCookieSourcedToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Refresh failed: %v", err)
 	}
-	if deletedWith != cookieToken {
-		t.Errorf("DeleteRefreshToken called with %q, want %q", deletedWith, cookieToken)
+	if consumedWith != cookieToken {
+		t.Errorf("ConsumeRefreshToken called with %q, want %q", consumedWith, cookieToken)
+	}
+}
+
+func TestRefresh_AlreadyConsumedTokenFailsWithoutIssuingNewTokens(t *testing.T) {
+	// Regression test for the TOCTOU fix: when ConsumeRefreshToken reports no
+	// row was found (the token was never valid, or a concurrent Refresh call
+	// already consumed it), Refresh must hard-fail rather than falling
+	// through to issue a new token pair.
+	var createRefreshTokenCalled bool
+
+	mdb := &mockDB{
+		consumeRefreshTokenFn: func(_ context.Context, _ string) (*model.RefreshToken, error) {
+			return nil, db.ErrNoRefreshTokenFound
+		},
+		createRefreshTokenFn: func(_ context.Context, user *model.User, _, _, _ string) (*model.RefreshToken, error) {
+			createRefreshTokenCalled = true
+			return &model.RefreshToken{Token: "new-refresh-token", UserId: user.ID}, nil
+		},
+	}
+	srv := newTestServer(mdb, &noopMailSender{})
+	ctx := context.Background()
+
+	_, err := srv.Refresh(ctx, &authv1.RefreshRequest{RefreshToken: "already-consumed-token"})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	st, _ := status.FromError(err)
+	if st.Code() != codes.Unauthenticated {
+		t.Errorf("code = %v, want %v", st.Code(), codes.Unauthenticated)
+	}
+	if createRefreshTokenCalled {
+		t.Error("CreateRefreshToken must not be called when the old token could not be consumed")
 	}
 }
 
@@ -676,6 +761,8 @@ func TestGetToken_ScopeResolution(t *testing.T) {
 }
 
 func TestGetToken_ClientNotFound(t *testing.T) {
+	// Regression test for enumeration fix: an unknown client_id must be
+	// indistinguishable from a known client_id with a wrong secret.
 	mdb := &mockDB{
 		getServiceClientByIDFn: func(_ context.Context, _ string) (*model.ServiceClientInternal, error) {
 			return nil, db.ErrServiceClientNotFound
@@ -692,8 +779,12 @@ func TestGetToken_ClientNotFound(t *testing.T) {
 		t.Fatal("expected error, got nil")
 	}
 	st, _ := status.FromError(err)
-	if st.Code() != codes.NotFound {
-		t.Errorf("code = %v, want %v", st.Code(), codes.NotFound)
+	if st.Code() != codes.Unauthenticated {
+		t.Errorf("code = %v, want %v", st.Code(), codes.Unauthenticated)
+	}
+	const wantMsg = "service client authentication error"
+	if st.Message() != wantMsg {
+		t.Errorf("message = %q, want %q (must match the wrong-secret case)", st.Message(), wantMsg)
 	}
 }
 

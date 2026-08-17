@@ -8,6 +8,7 @@ import (
 	"github.com/swayrider/authservice/internal/db"
 	"github.com/swayrider/authservice/internal/model"
 	authv1 "github.com/swayrider/protos/auth/v1"
+	"github.com/swayrider/swlib/security"
 )
 
 // =============================================================================
@@ -77,6 +78,57 @@ func TestRequestPasswordReset_UsesEmailPasswordResetScope(t *testing.T) {
 	}
 	if gotIdentifier != "test@example.com" {
 		t.Errorf("identifier = %q, want normalized %q", gotIdentifier, "test@example.com")
+	}
+}
+
+// =============================================================================
+// RequestPasswordReset per-IP email-send throttle Tests
+// =============================================================================
+
+func TestRequestPasswordReset_IPLocked_SkipsSend(t *testing.T) {
+	mdb := &mockDB{
+		isAttemptLockedFn: func(_ context.Context, scope db.ThrottleScope, identifier string) (bool, error) {
+			if scope != db.ScopeEmailSendByIP || identifier != "10.0.0.1" {
+				t.Errorf("unexpected scope/identifier: %v/%s", scope, identifier)
+			}
+			return true, nil
+		},
+	}
+	mail := newRecordingMailSender()
+	srv := newTestServerWithThrottle(mdb, mail, testThrottleConfig())
+	ctx := context.WithValue(context.Background(), security.OrigIpKey, "10.0.0.1")
+
+	resp, err := srv.RequestPasswordReset(ctx, &authv1.RequestPasswordResetRequest{Email: "test@example.com"})
+	if err != nil {
+		t.Fatalf("RequestPasswordReset failed: %v", err)
+	}
+	if resp == nil {
+		t.Fatal("expected non-nil response")
+	}
+	mail.assertNoSend(t)
+}
+
+func TestRequestPasswordReset_UsesEmailSendByIPScope(t *testing.T) {
+	var gotScope db.ThrottleScope
+	var gotIdentifier string
+	mdb := &mockDB{
+		recordAttemptResultFn: func(_ context.Context, scope db.ThrottleScope, identifier string, _ bool, _ int, _, _ time.Duration) error {
+			gotScope = scope
+			gotIdentifier = identifier
+			return nil
+		},
+	}
+	srv := newTestServerWithThrottle(mdb, &noopMailSender{}, testThrottleConfig())
+	ctx := context.WithValue(context.Background(), security.OrigIpKey, "10.0.0.1")
+
+	if _, err := srv.RequestPasswordReset(ctx, &authv1.RequestPasswordResetRequest{Email: "test@example.com"}); err != nil {
+		t.Fatalf("RequestPasswordReset failed: %v", err)
+	}
+	if gotScope != db.ScopeEmailSendByIP {
+		t.Errorf("scope = %v, want %v", gotScope, db.ScopeEmailSendByIP)
+	}
+	if gotIdentifier != "10.0.0.1" {
+		t.Errorf("identifier = %q, want %q", gotIdentifier, "10.0.0.1")
 	}
 }
 

@@ -99,11 +99,18 @@ func CookieForwarder(ctx context.Context, w http.ResponseWriter, resp proto.Mess
 	return nil
 }
 
-// CookieHeaderMatcher is a grpc-gateway header matcher that forwards cookie headers.
-// This allows the refresh token to be read from cookies in addition to the request body.
+// CookieHeaderMatcher is a grpc-gateway header matcher that forwards cookie
+// headers and the caller's original scheme. This allows the refresh token to
+// be read from cookies in addition to the request body, and lets
+// ClientInfoInterceptor correctly derive security.SecureKey for the cookies
+// CookieForwarder issues (grpc-gateway's DefaultHeaderMatcher drops
+// X-Forwarded-Proto by default).
 func CookieHeaderMatcher(header string) (string, bool) {
-	if strings.EqualFold(header, "cookie") {
+	switch {
+	case strings.EqualFold(header, "cookie"):
 		return "cookie", true
+	case strings.EqualFold(header, "x-forwarded-proto"):
+		return "x-forwarded-proto", true
 	}
 	return runtime.DefaultHeaderMatcher(header)
 }
@@ -261,8 +268,8 @@ func (s *AuthServer) GetToken(
 		if errors.Is(err, db.ErrServiceClientNotFound) {
 			s.recordClientAttempt(ctx, req.ClientId, false)
 			return nil, status.Error(
-				codes.NotFound,
-				"service client not found")
+				codes.Unauthenticated,
+				"service client authentication error")
 		}
 		// Infrastructure error -- not recorded, same reasoning as Login.
 		return nil, status.Error(codes.Internal, "internal error")
@@ -319,7 +326,9 @@ func (s *AuthServer) GetToken(
 //   - Token must be valid (not revoked/expired) and match the user agent
 //   - The IP is checked as a soft anomaly signal only: a mismatch is logged,
 //     never rejected (mobile clients legitimately change IP between requests)
-//   - Old token is deleted before new tokens are issued
+//   - The old token is atomically consumed (read-and-deleted in one statement)
+//     before verification, so it cannot be replayed by a concurrent request
+//     even if verification then fails
 //
 // Returns:
 //   - codes.Unauthenticated: If the refresh token is invalid or verification fails
@@ -338,10 +347,12 @@ func (s *AuthServer) Refresh(
 		refreshToken = req.RefreshToken
 	}
 
-	// Retrieve and validate the refresh token
-	token, err := s.DB().GetRefreshToken(ctx, refreshToken)
+	// Atomically retrieve and invalidate the refresh token (rotation). A
+	// single statement closes the TOCTOU window: concurrent refreshes of the
+	// same token cannot both succeed, since only one DELETE finds a row.
+	token, err := s.DB().ConsumeRefreshToken(ctx, refreshToken)
 	if err != nil {
-		lg.Errorf("could not get refresh token: %v", err)
+		lg.Errorf("could not consume refresh token: %v", err)
 		return nil, status.Errorf(
 			codes.Unauthenticated,
 			"could not get refresh token")
@@ -361,12 +372,6 @@ func (s *AuthServer) Refresh(
 	if !token.MatchesIP(origIp) {
 		lg.Warnf("refresh token IP mismatch user=%s stored=%q got=%q",
 			token.UserId, token.Ip, origIp)
-	}
-
-	// Invalidate the old refresh token (rotation)
-	err = s.DB().DeleteRefreshToken(ctx, refreshToken)
-	if err != nil {
-		lg.Warnf("could not delete refresh token: %v", err)
 	}
 
 	// Load user data for new token generation

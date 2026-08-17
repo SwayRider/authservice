@@ -23,7 +23,7 @@ type Database interface {
 
 	// Refresh token operations
 	CreateRefreshToken(ctx context.Context, user *model.User, jwtID, ip, userAgent string) (*model.RefreshToken, error)
-	GetRefreshToken(ctx context.Context, token string) (*model.RefreshToken, error)
+	ConsumeRefreshToken(ctx context.Context, token string) (*model.RefreshToken, error)
 	DeleteRefreshToken(ctx context.Context, token string) error
 	DeleteRefreshTokensByUserID(ctx context.Context, userId string) error
 
