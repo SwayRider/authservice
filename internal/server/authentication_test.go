@@ -429,7 +429,7 @@ func TestLogin_RecordsSuccessOnCorrectCredentials(t *testing.T) {
 
 func TestRefresh_TokenNotFound(t *testing.T) {
 	mdb := &mockDB{
-		getRefreshTokenFn: func(_ context.Context, _ string) (*model.RefreshToken, error) {
+		consumeRefreshTokenFn: func(_ context.Context, _ string) (*model.RefreshToken, error) {
 			return nil, errors.New("token not found")
 		},
 	}
@@ -451,7 +451,7 @@ func TestRefresh_IPMismatchSucceeds(t *testing.T) {
 	// signal but never blocks the refresh — mobile clients legitimately
 	// change IP between login and refresh.
 	mdb := &mockDB{
-		getRefreshTokenFn: func(_ context.Context, _ string) (*model.RefreshToken, error) {
+		consumeRefreshTokenFn: func(_ context.Context, _ string) (*model.RefreshToken, error) {
 			return &model.RefreshToken{
 				Token:      "some-token",
 				UserId:     "user-1",
@@ -488,7 +488,7 @@ func TestRefresh_IPMismatchSucceeds(t *testing.T) {
 func TestRefresh_IPMatchSucceeds(t *testing.T) {
 	// Same request with a matching forwarded IP: refresh succeeds.
 	mdb := &mockDB{
-		getRefreshTokenFn: func(_ context.Context, _ string) (*model.RefreshToken, error) {
+		consumeRefreshTokenFn: func(_ context.Context, _ string) (*model.RefreshToken, error) {
 			return &model.RefreshToken{
 				Token:      "some-token",
 				UserId:     "user-1",
@@ -524,7 +524,7 @@ func TestRefresh_Success(t *testing.T) {
 	const storedToken = "valid-refresh-token"
 	// The token must have empty IP and UA to match the context (which also returns "").
 	mdb := &mockDB{
-		getRefreshTokenFn: func(_ context.Context, _ string) (*model.RefreshToken, error) {
+		consumeRefreshTokenFn: func(_ context.Context, _ string) (*model.RefreshToken, error) {
 			return &model.RefreshToken{
 				Token:      storedToken,
 				UserId:     "test-user-id",
@@ -561,19 +561,16 @@ func TestRefresh_Success(t *testing.T) {
 
 func TestRefresh_DeletesCookieSourcedToken(t *testing.T) {
 	const cookieToken = "cookie-sourced-refresh-token"
-	var deletedWith string
+	var consumedWith string
 
 	mdb := &mockDB{
-		getRefreshTokenFn: func(_ context.Context, token string) (*model.RefreshToken, error) {
+		consumeRefreshTokenFn: func(_ context.Context, token string) (*model.RefreshToken, error) {
+			consumedWith = token
 			return &model.RefreshToken{
 				Token:      token,
 				UserId:     "test-user-id",
 				ValidUntil: time.Now().Add(time.Hour),
 			}, nil
-		},
-		deleteRefreshTokenFn: func(_ context.Context, token string) error {
-			deletedWith = token
-			return nil
 		},
 		getUserByIDFn: func(_ context.Context, _ string) (*model.UserInternal, error) {
 			return testUser(), nil
@@ -598,8 +595,40 @@ func TestRefresh_DeletesCookieSourcedToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Refresh failed: %v", err)
 	}
-	if deletedWith != cookieToken {
-		t.Errorf("DeleteRefreshToken called with %q, want %q", deletedWith, cookieToken)
+	if consumedWith != cookieToken {
+		t.Errorf("ConsumeRefreshToken called with %q, want %q", consumedWith, cookieToken)
+	}
+}
+
+func TestRefresh_AlreadyConsumedTokenFailsWithoutIssuingNewTokens(t *testing.T) {
+	// Regression test for the TOCTOU fix: when ConsumeRefreshToken reports no
+	// row was found (the token was never valid, or a concurrent Refresh call
+	// already consumed it), Refresh must hard-fail rather than falling
+	// through to issue a new token pair.
+	var createRefreshTokenCalled bool
+
+	mdb := &mockDB{
+		consumeRefreshTokenFn: func(_ context.Context, _ string) (*model.RefreshToken, error) {
+			return nil, db.ErrNoRefreshTokenFound
+		},
+		createRefreshTokenFn: func(_ context.Context, user *model.User, _, _, _ string) (*model.RefreshToken, error) {
+			createRefreshTokenCalled = true
+			return &model.RefreshToken{Token: "new-refresh-token", UserId: user.ID}, nil
+		},
+	}
+	srv := newTestServer(mdb, &noopMailSender{})
+	ctx := context.Background()
+
+	_, err := srv.Refresh(ctx, &authv1.RefreshRequest{RefreshToken: "already-consumed-token"})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	st, _ := status.FromError(err)
+	if st.Code() != codes.Unauthenticated {
+		t.Errorf("code = %v, want %v", st.Code(), codes.Unauthenticated)
+	}
+	if createRefreshTokenCalled {
+		t.Error("CreateRefreshToken must not be called when the old token could not be consumed")
 	}
 }
 
