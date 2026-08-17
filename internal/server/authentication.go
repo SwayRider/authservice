@@ -99,11 +99,18 @@ func CookieForwarder(ctx context.Context, w http.ResponseWriter, resp proto.Mess
 	return nil
 }
 
-// CookieHeaderMatcher is a grpc-gateway header matcher that forwards cookie headers.
-// This allows the refresh token to be read from cookies in addition to the request body.
+// CookieHeaderMatcher is a grpc-gateway header matcher that forwards cookie
+// headers and the caller's original scheme. This allows the refresh token to
+// be read from cookies in addition to the request body, and lets
+// ClientInfoInterceptor correctly derive security.SecureKey for the cookies
+// CookieForwarder issues (grpc-gateway's DefaultHeaderMatcher drops
+// X-Forwarded-Proto by default).
 func CookieHeaderMatcher(header string) (string, bool) {
-	if strings.EqualFold(header, "cookie") {
+	switch {
+	case strings.EqualFold(header, "cookie"):
 		return "cookie", true
+	case strings.EqualFold(header, "x-forwarded-proto"):
+		return "x-forwarded-proto", true
 	}
 	return runtime.DefaultHeaderMatcher(header)
 }

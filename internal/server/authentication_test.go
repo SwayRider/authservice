@@ -4,6 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -53,6 +56,9 @@ func TestCookieHeaderMatcher(t *testing.T) {
 		{"cookie", "cookie", true},
 		{"Cookie", "cookie", true},
 		{"COOKIE", "cookie", true},
+		{"x-forwarded-proto", "x-forwarded-proto", true},
+		{"X-Forwarded-Proto", "x-forwarded-proto", true},
+		{"X-FORWARDED-PROTO", "x-forwarded-proto", true},
 	}
 
 	for _, tt := range tests {
@@ -75,6 +81,53 @@ func TestCookieHeaderMatcher_NonCookieHeader(t *testing.T) {
 	// The runtime default matcher returns false for arbitrary non-standard headers —
 	// we just verify the call doesn't panic and returns a consistent result.
 	_ = ok
+}
+
+// =============================================================================
+// CookieForwarder Tests
+// =============================================================================
+
+func TestCookieForwarder_SetsSecureFromContext(t *testing.T) {
+	ctx := context.WithValue(context.Background(), security.SecureKey, true)
+	w := httptest.NewRecorder()
+
+	if err := CookieForwarder(ctx, w, &authv1.LoginResponse{RefreshToken: "test-refresh-token"}); err != nil {
+		t.Fatalf("CookieForwarder failed: %v", err)
+	}
+
+	cookie := findSetCookie(t, w, "refresh_token")
+	if !cookie.Secure {
+		t.Error("Secure = false, want true when security.SecureKey is true in context")
+	}
+}
+
+func TestCookieForwarder_DefaultsInsecureWithoutSignal(t *testing.T) {
+	ctx := context.Background()
+	w := httptest.NewRecorder()
+
+	if err := CookieForwarder(ctx, w, &authv1.LoginResponse{RefreshToken: "test-refresh-token"}); err != nil {
+		t.Fatalf("CookieForwarder failed: %v", err)
+	}
+
+	cookie := findSetCookie(t, w, "refresh_token")
+	if cookie.Secure {
+		t.Error("Secure = true, want false when no security.SecureKey is present (e.g. direct HTTP debugging)")
+	}
+}
+
+// findSetCookie locates a Set-Cookie header on the recorder matching name
+// (accounting for the configured cookie namespace prefix) and fails the test
+// if it's not found.
+func findSetCookie(t *testing.T, w *httptest.ResponseRecorder, name string) *http.Cookie {
+	t.Helper()
+	resp := w.Result()
+	for _, c := range resp.Cookies() {
+		if strings.HasSuffix(c.Name, name) {
+			return c
+		}
+	}
+	t.Fatalf("no Set-Cookie found matching %q; got %v", name, resp.Header["Set-Cookie"])
+	return nil
 }
 
 // =============================================================================
