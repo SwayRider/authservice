@@ -24,9 +24,11 @@ import (
 // InviteUser adds an email address to the registration invite list and sends
 // an invitation email to that address.
 //
-// If an invite already exists for the email and the user has not yet registered,
-// AlreadyExists is returned. If the user has registered but their account was
-// subsequently deleted, the invite is reset so they can re-register.
+// If registration for the email is already pending (invited, not yet
+// registered) or already complete (has an active account), AlreadyExists is
+// returned with a uniform message that doesn't distinguish the two cases. If
+// the user had registered but their account was subsequently deleted, the
+// invite is reset so they can re-register.
 func (s *AuthServer) InviteUser(
 	ctx context.Context,
 	req *authv1.InviteUserRequest,
@@ -52,14 +54,21 @@ func (s *AuthServer) InviteUser(
 		}
 		if !inv.Registered {
 			return nil, status.Errorf(
-				codes.AlreadyExists, "invite for %s already exists", req.Email)
+				codes.AlreadyExists,
+				"registration for %s is already pending or complete", req.Email)
 		}
 
 		// Invite was consumed — allow re-invitation only if the account is gone.
+		// The message below is deliberately identical to the branch above: an
+		// admin caller doesn't need to distinguish "invite still pending" from
+		// "account already exists" to decide what to do next (wait, or point
+		// the user to login), and collapsing the two avoids exposing the
+		// specific invite/account state distinction even to a trusted caller.
 		_, userErr := s.DB().GetUserByEmail(ctx, req.Email)
 		if userErr == nil {
 			return nil, status.Errorf(
-				codes.AlreadyExists, "user %s already has an active account", req.Email)
+				codes.AlreadyExists,
+				"registration for %s is already pending or complete", req.Email)
 		}
 		if !errors.Is(userErr, db.ErrUserNotFound) {
 			lg.Errorf("failed to look up user %s: %v", req.Email, userErr)

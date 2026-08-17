@@ -29,9 +29,9 @@ import (
 // Register creates a new user account with the provided email and password.
 //
 // The registration flow:
-//  1. In INVITE_ONLY mode: verify email is in the invite list (PermissionDenied if not)
-//  2. Validate password meets minimum entropy requirements
-//  3. Hash password using Argon2id
+//  1. Validate password meets minimum entropy requirements
+//  2. Hash password using Argon2id
+//  3. In INVITE_ONLY mode: verify email is in the invite list
 //  4. Create user record in database
 //  5. In INVITE_ONLY mode: consume (delete) the invite
 //  6. Asynchronously send verification email
@@ -39,26 +39,24 @@ import (
 // The verification URL in the request is provided by the caller (mobile app, web app)
 // since different clients have different verification page URLs.
 //
+// To prevent account/invite enumeration, every outcome that could reveal
+// whether an email is already registered or (in INVITE_ONLY mode) already
+// invited returns the same generic success response with an empty UserId --
+// mirroring the anti-enumeration pattern already used by VerifyEmail and
+// RequestPasswordReset in this file. If the email turns out to already have
+// an account, the real owner is notified asynchronously via the same
+// password-reset email RequestPasswordReset would send them. Only
+// non-enumerating failures (weak password, infrastructure errors) return a
+// distinct error.
+//
 // Returns:
-//   - codes.PermissionDenied: In INVITE_ONLY mode when email has no pending invite
 //   - codes.InvalidArgument: If password is too weak
-//   - codes.AlreadyExists: If email is already registered
+//   - codes.Internal: On infrastructure/database errors
 func (s *AuthServer) Register(
 	ctx context.Context,
 	req *authv1.RegisterRequest,
 ) (*authv1.RegisterResponse, error) {
 	lg := s.Logger().Derive(log.WithFunction("Register"))
-
-	if s.registrationMode == registrationModeInviteOnly {
-		invited, err := s.DB().IsEmailInvited(ctx, req.Email)
-		if err != nil {
-			lg.Errorf("failed to check invite for %s: %v", req.Email, err)
-			return nil, status.Errorf(codes.Internal, "registration error")
-		}
-		if !invited {
-			return nil, status.Errorf(codes.PermissionDenied, "invitation required")
-		}
-	}
 
 	err := passwordvalidator.Validate(req.Password, crypto.PasswordMinEntropy)
 	if err != nil {
@@ -74,23 +72,19 @@ func (s *AuthServer) Register(
 			codes.Internal, "password error")
 	}
 
-	userid, err := s.DB().RegisterUser(ctx, req.Email, hashedPassword)
-	if err != nil {
-		lg.Debugf("user %s failed to self-register: %v", req.Email, err)
-		if errors.Is(err, db.ErrUniqueViolation) {
-			return nil, status.Errorf(
-				codes.AlreadyExists,
-				"user with email %s already exists", req.Email)
-		}
-		return nil, status.Errorf(
-			codes.Internal,
-			"registration error for user with email: %s", req.Email)
+	resp := &authv1.RegisterResponse{
+		Message: "If this email is eligible for registration, check your inbox to continue.",
 	}
-	lg.Debugf("user resigered with ID: %s", userid)
 
 	if s.registrationMode == registrationModeInviteOnly {
-		if err := s.DB().ConsumeInvite(ctx, req.Email); err != nil {
-			lg.Errorf("failed to consume invite for %s: %v", req.Email, err)
+		invited, err := s.DB().IsEmailInvited(ctx, req.Email)
+		if err != nil {
+			lg.Errorf("failed to check invite for %s: %v", req.Email, err)
+			return nil, status.Errorf(codes.Internal, "registration error")
+		}
+		if !invited {
+			lg.Debugf("registration attempt for non-invited email %s", req.Email)
+			return resp, nil
 		}
 	}
 
@@ -98,14 +92,36 @@ func (s *AuthServer) Register(
 	if verificationUrl == "" {
 		verificationUrl = s.verificationUrl
 	}
+
+	userid, err := s.DB().RegisterUser(ctx, req.Email, hashedPassword)
+	if err != nil {
+		if errors.Is(err, db.ErrUniqueViolation) {
+			lg.Debugf("registration attempt for existing email %s", req.Email)
+			// Notify the real account owner the same way RequestPasswordReset
+			// would -- shares its cooldown scope/budget since it's
+			// functionally the same action (a password-reset email to this
+			// address).
+			if s.tryConsumeEmailCooldown(ctx, db.ScopeEmailPasswordReset, normalizeIdentifier(req.Email)) {
+				go s.sendPasswordResetEmail("", req.Email, s.resetPasswordUrl)
+			}
+			return resp, nil
+		}
+		lg.Errorf("registration error for user with email %s: %v", req.Email, err)
+		return nil, status.Errorf(codes.Internal, "registration error")
+	}
+	lg.Debugf("user registered with ID: %s", userid)
+
+	if s.registrationMode == registrationModeInviteOnly {
+		if err := s.DB().ConsumeInvite(ctx, req.Email); err != nil {
+			lg.Errorf("failed to consume invite for %s: %v", req.Email, err)
+		}
+	}
+
 	if s.tryConsumeEmailCooldown(ctx, db.ScopeEmailVerification, normalizeIdentifier(req.Email)) {
 		go s.sendVerificationEmail(userid, "", verificationUrl)
 	}
 
-	return &authv1.RegisterResponse{
-		UserId:  userid,
-		Message: "User registered successfully",
-	}, nil
+	return resp, nil
 }
 
 // VerifyEmail sends a new verification email to the specified address.
