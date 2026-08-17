@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/swayrider/authservice/internal/db"
 	"github.com/swayrider/authservice/internal/model"
 	"github.com/swayrider/grpcclients/mailclient"
 	authv1 "github.com/swayrider/protos/auth/v1"
@@ -37,7 +38,11 @@ func (s *AuthServer) RequestPasswordReset(
 	if resetUrl == "" {
 		resetUrl = s.resetPasswordUrl
 	}
-	go s.sendPasswordResetEmail("", req.Email, resetUrl)
+	// Cooldown check runs synchronously; the response stays unconditionally
+	// generic either way -- only the send is skipped.
+	if s.tryConsumeEmailCooldown(ctx, db.ScopeEmailPasswordReset, normalizeIdentifier(req.Email)) {
+		go s.sendPasswordResetEmail("", req.Email, resetUrl)
+	}
 	return &authv1.RequestPasswordResetResponse{}, nil
 }
 

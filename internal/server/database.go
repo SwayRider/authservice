@@ -2,7 +2,9 @@ package server
 
 import (
 	"context"
+	"time"
 
+	"github.com/swayrider/authservice/internal/db"
 	"github.com/swayrider/authservice/internal/model"
 )
 
@@ -55,4 +57,9 @@ type Database interface {
 	IsEmailInvited(ctx context.Context, email string) (bool, error)
 	CountInvites(ctx context.Context, registered *bool) (int, error)
 	ListInvites(ctx context.Context, page, pageSize int, registered *bool) ([]model.Invite, error)
+
+	// Security throttle operations (account lockout, email cooldown)
+	IsAttemptLocked(ctx context.Context, scope db.ThrottleScope, identifier string) (bool, error)
+	RecordAttemptResult(ctx context.Context, scope db.ThrottleScope, identifier string, success bool, maxAttempts int, window, lockoutDuration time.Duration) error
+	TryConsumeEmailCooldown(ctx context.Context, scope db.ThrottleScope, identifier string, cooldown time.Duration) (bool, error)
 }

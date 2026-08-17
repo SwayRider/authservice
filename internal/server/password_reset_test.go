@@ -5,9 +5,80 @@ import (
 	"testing"
 	"time"
 
+	"github.com/swayrider/authservice/internal/db"
 	"github.com/swayrider/authservice/internal/model"
 	authv1 "github.com/swayrider/protos/auth/v1"
 )
+
+// =============================================================================
+// RequestPasswordReset email-cooldown Tests
+// =============================================================================
+
+func TestRequestPasswordReset_CooldownActive_SkipsSend(t *testing.T) {
+	mdb := &mockDB{
+		tryConsumeEmailCooldownFn: func(_ context.Context, _ db.ThrottleScope, _ string, _ time.Duration) (bool, error) {
+			return false, nil
+		},
+	}
+	mail := newRecordingMailSender()
+	srv := newTestServerWithThrottle(mdb, mail, testThrottleConfig())
+	ctx := context.Background()
+
+	resp, err := srv.RequestPasswordReset(ctx, &authv1.RequestPasswordResetRequest{Email: "test@example.com"})
+	if err != nil {
+		t.Fatalf("RequestPasswordReset failed: %v", err)
+	}
+	if resp == nil {
+		t.Fatal("expected non-nil response")
+	}
+	mail.assertNoSend(t)
+}
+
+func TestRequestPasswordReset_CooldownElapsed_Sends(t *testing.T) {
+	mdb := &mockDB{
+		getUserByEmailFn: func(_ context.Context, _ string) (*model.UserInternal, error) {
+			return testUser(), nil
+		},
+		createResetPassTokenFn: func(_ context.Context, _ *model.User) (*model.PasswordResetToken, error) {
+			return &model.PasswordResetToken{Token: "test-reset-token"}, nil
+		},
+	}
+	mail := newRecordingMailSender()
+	srv := newTestServerWithThrottle(mdb, mail, testThrottleConfig())
+	ctx := context.Background()
+
+	if _, err := srv.RequestPasswordReset(ctx, &authv1.RequestPasswordResetRequest{Email: "test@example.com"}); err != nil {
+		t.Fatalf("RequestPasswordReset failed: %v", err)
+	}
+	mail.waitForSend(t)
+}
+
+func TestRequestPasswordReset_UsesEmailPasswordResetScope(t *testing.T) {
+	var gotScope db.ThrottleScope
+	var gotIdentifier string
+	mdb := &mockDB{
+		tryConsumeEmailCooldownFn: func(_ context.Context, scope db.ThrottleScope, identifier string, _ time.Duration) (bool, error) {
+			gotScope = scope
+			gotIdentifier = identifier
+			return false, nil
+		},
+	}
+	srv := newTestServerWithThrottle(mdb, &noopMailSender{}, testThrottleConfig())
+	ctx := context.Background()
+
+	if _, err := srv.RequestPasswordReset(ctx, &authv1.RequestPasswordResetRequest{Email: "Test@Example.com"}); err != nil {
+		t.Fatalf("RequestPasswordReset failed: %v", err)
+	}
+	// Deliberately a different scope from Register/VerifyEmail's
+	// db.ScopeEmailVerification -- password-reset spam and verification
+	// spam should not share one budget.
+	if gotScope != db.ScopeEmailPasswordReset {
+		t.Errorf("scope = %v, want %v", gotScope, db.ScopeEmailPasswordReset)
+	}
+	if gotIdentifier != "test@example.com" {
+		t.Errorf("identifier = %q, want normalized %q", gotIdentifier, "test@example.com")
+	}
+}
 
 func TestResetPassword_RevokesRefreshTokensOnSuccess(t *testing.T) {
 	var revokedUserID string

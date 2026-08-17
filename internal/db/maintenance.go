@@ -49,5 +49,11 @@ func (d *DB) DoDatabaseMaintenance(ctx context.Context) error {
 		return err
 	}
 
+	err = d.cleanupSecurityThrottle(ctx)
+	if err != nil {
+		lg.Warnf("failed to cleanup security throttle: %v", err)
+		return err
+	}
+
 	return nil
 }

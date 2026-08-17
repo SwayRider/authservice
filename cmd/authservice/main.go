@@ -46,6 +46,7 @@ import (
 	"github.com/swayrider/authservice/migrations"
 	"github.com/swayrider/swlib/http/cookies"
 	log "github.com/swayrider/swlib/logger"
+	"github.com/swayrider/swlib/ratelimit"
 
 	"github.com/swayrider/swlib/app"
 	"github.com/swayrider/swlib/crypto"
@@ -126,6 +127,42 @@ const (
 
 	DefVerificationUrl  = ""
 	DefResetPasswordUrl = ""
+
+	FldLoginLockoutThreshold     = "login-lockout-threshold"
+	FldLoginLockoutWindowSecs    = "login-lockout-window-secs"
+	FldLoginLockoutDurationSecs  = "login-lockout-duration-secs"
+	FldClientLockoutThreshold    = "client-lockout-threshold"
+	FldClientLockoutWindowSecs   = "client-lockout-window-secs"
+	FldClientLockoutDurationSecs = "client-lockout-duration-secs"
+	FldEmailCooldownSecs         = "email-cooldown-secs"
+
+	EnvLoginLockoutThreshold     = "LOGIN_LOCKOUT_THRESHOLD"
+	EnvLoginLockoutWindowSecs    = "LOGIN_LOCKOUT_WINDOW_SECS"
+	EnvLoginLockoutDurationSecs  = "LOGIN_LOCKOUT_DURATION_SECS"
+	EnvClientLockoutThreshold    = "CLIENT_LOCKOUT_THRESHOLD"
+	EnvClientLockoutWindowSecs   = "CLIENT_LOCKOUT_WINDOW_SECS"
+	EnvClientLockoutDurationSecs = "CLIENT_LOCKOUT_DURATION_SECS"
+	EnvEmailCooldownSecs         = "EMAIL_COOLDOWN_SECS"
+
+	DefLoginLockoutThreshold     = 5
+	DefLoginLockoutWindowSecs    = 900
+	DefLoginLockoutDurationSecs  = 900
+	DefClientLockoutThreshold    = 5
+	DefClientLockoutWindowSecs   = 900
+	DefClientLockoutDurationSecs = 900
+	DefEmailCooldownSecs         = 60
+
+	FldRateLimitRPS         = "rate-limit-rps"
+	FldRateLimitBurst       = "rate-limit-burst"
+	FldRateLimitIdleTTLSecs = "rate-limit-idle-ttl-secs"
+
+	EnvRateLimitRPS         = "RATE_LIMIT_RPS"
+	EnvRateLimitBurst       = "RATE_LIMIT_BURST"
+	EnvRateLimitIdleTTLSecs = "RATE_LIMIT_IDLE_TTL_SECS"
+
+	DefRateLimitRPS         = 50
+	DefRateLimitBurst       = 100
+	DefRateLimitIdleTTLSecs = 300
 )
 
 func main() {
@@ -165,15 +202,46 @@ func main() {
 			app.NewStringConfigField(
 				FldResetPasswordUrl, EnvResetPasswordUrl,
 				"Default URL for password reset (used when caller omits resetUrl)", DefResetPasswordUrl),
+			app.NewIntConfigField(
+				FldLoginLockoutThreshold, EnvLoginLockoutThreshold,
+				"Failed Login attempts before an account is locked out", DefLoginLockoutThreshold),
+			app.NewIntConfigField(
+				FldLoginLockoutWindowSecs, EnvLoginLockoutWindowSecs,
+				"Sliding window (seconds) over which failed Login attempts are counted", DefLoginLockoutWindowSecs),
+			app.NewIntConfigField(
+				FldLoginLockoutDurationSecs, EnvLoginLockoutDurationSecs,
+				"Lockout duration (seconds) once the Login failure threshold is reached", DefLoginLockoutDurationSecs),
+			app.NewIntConfigField(
+				FldClientLockoutThreshold, EnvClientLockoutThreshold,
+				"Failed GetToken attempts before a service client is locked out", DefClientLockoutThreshold),
+			app.NewIntConfigField(
+				FldClientLockoutWindowSecs, EnvClientLockoutWindowSecs,
+				"Sliding window (seconds) over which failed GetToken attempts are counted", DefClientLockoutWindowSecs),
+			app.NewIntConfigField(
+				FldClientLockoutDurationSecs, EnvClientLockoutDurationSecs,
+				"Lockout duration (seconds) once the GetToken failure threshold is reached", DefClientLockoutDurationSecs),
+			app.NewIntConfigField(
+				FldEmailCooldownSecs, EnvEmailCooldownSecs,
+				"Minimum seconds between outbound verification/reset emails to the same address", DefEmailCooldownSecs),
+			app.NewIntConfigField(
+				FldRateLimitRPS, EnvRateLimitRPS,
+				"Sustained requests/sec allowed per peer IP on the raw gRPC port (coarse fallback safety net)", DefRateLimitRPS),
+			app.NewIntConfigField(
+				FldRateLimitBurst, EnvRateLimitBurst,
+				"Burst allowance per peer IP on the raw gRPC port", DefRateLimitBurst),
+			app.NewIntConfigField(
+				FldRateLimitIdleTTLSecs, EnvRateLimitIdleTTLSecs,
+				"Seconds of inactivity before a peer IP's rate-limit bucket is evicted", DefRateLimitIdleTTLSecs),
 		).
 		WithDatabase(dbCtor, dbBootstrap).
 		WithBackgroundRoutines(
 			keyChecker,
 			dbMaintenance,
+			rateLimitEvictor,
 		)
 
 	grpcConfig := app.NewGrpcConfig(
-		app.AuthInterceptor|app.ClientInfoInterceptor,
+		app.AuthInterceptor|app.ClientInfoInterceptor|app.RateLimitInterceptor,
 		func() ([]string, error) {
 			return application.Database().(*db.DB).GetVerificationKeys(
 				context.Background())
@@ -189,9 +257,65 @@ func main() {
 	)
 	grpcConfig.SetForwardResponseFn(server.CookieForwarder)
 	grpcConfig.SetHeaderMatcherFn(server.CookieHeaderMatcher)
+
+	// The rate limiter's thresholds come from config, which is only parsed
+	// once application.Run() starts -- so it's built via an initializer
+	// (runs after config parse, before startGrpc reads GrpcConfig.RateLimiter
+	// to build the interceptor chain) rather than here.
+	application = application.WithInitializers(rateLimiterInitializer(grpcConfig))
 	application = application.WithGrpc(grpcConfig)
 	application = application.WithHTTP(startWebServer, stopWebServer)
 	application.Run()
+}
+
+// rateLimiter backs both the gRPC rate-limit interceptor and the eviction
+// background routine. Set once by rateLimiterInitializer during app startup
+// (before any background routine or the gRPC server start), then only read
+// afterward -- see the ordering note on rateLimiterInitializer.
+var rateLimiter *ratelimit.Limiter
+
+// rateLimiterInitializer returns an app.Callback that builds the rate
+// limiter from parsed config and attaches it to grpcConfig. It must run as
+// an initializer (after config parse, before startGrpc) since GrpcConfig's
+// interceptor chain is built from grpcConfig.RateLimiter at gRPC server
+// startup, and RATE_LIMIT_* values aren't available until config parsing
+// happens inside application.Run().
+func rateLimiterInitializer(grpcConfig *app.GrpcConfig) app.Callback {
+	return func(a app.App) error {
+		rps := app.GetConfigField[int](a.Config(), FldRateLimitRPS)
+		burst := app.GetConfigField[int](a.Config(), FldRateLimitBurst)
+		idleTTLSecs := app.GetConfigField[int](a.Config(), FldRateLimitIdleTTLSecs)
+		rateLimiter = ratelimit.New(float64(rps), burst, time.Duration(idleTTLSecs)*time.Second)
+		grpcConfig.SetRateLimiter(rateLimiter)
+		return nil
+	}
+}
+
+// rateLimitEvictor is a background routine that periodically prunes idle
+// per-IP buckets from rateLimiter, bounding memory under sustained,
+// high-cardinality traffic. Runs on a shorter interval than the hourly DB
+// maintenance since an in-memory map growing under a live attack needs
+// pruning quickly.
+func rateLimitEvictor(a app.App) {
+	lg := a.Logger().Derive(log.WithFunction("rateLimitEvictor"))
+	ctx := a.BackgroundContext()
+	defer func() {
+		a.BackgroundWaitGroup().Done()
+	}()
+
+	ticker := time.NewTicker(5 * time.Minute)
+	for {
+		select {
+		case <-ticker.C:
+			if rateLimiter != nil {
+				rateLimiter.Evict()
+			}
+		case <-ctx.Done():
+			lg.Infoln("stopping rate limit evictor")
+			ticker.Stop()
+			return
+		}
+	}
 }
 
 // mailServiceClientCtor creates a new mail service gRPC client.
@@ -357,6 +481,16 @@ func grpcAuthRegistrar(r grpc.ServiceRegistrar, a app.App) {
 		lg.Fatalf("invalid REGISTRATION_MODE %q (must be 'open' or 'invite_only')", registrationMode)
 	}
 
+	throttle := server.ThrottleConfig{
+		LoginMaxAttempts:      app.GetConfigField[int](a.Config(), FldLoginLockoutThreshold),
+		LoginWindow:           time.Duration(app.GetConfigField[int](a.Config(), FldLoginLockoutWindowSecs)) * time.Second,
+		LoginLockoutDuration:  time.Duration(app.GetConfigField[int](a.Config(), FldLoginLockoutDurationSecs)) * time.Second,
+		ClientMaxAttempts:     app.GetConfigField[int](a.Config(), FldClientLockoutThreshold),
+		ClientWindow:          time.Duration(app.GetConfigField[int](a.Config(), FldClientLockoutWindowSecs)) * time.Second,
+		ClientLockoutDuration: time.Duration(app.GetConfigField[int](a.Config(), FldClientLockoutDurationSecs)) * time.Second,
+		EmailCooldown:         time.Duration(app.GetConfigField[int](a.Config(), FldEmailCooldownSecs)) * time.Second,
+	}
+
 	srv := server.NewAuthServer(
 		a.Database().(*db.DB),
 		a.Logger(),
@@ -366,6 +500,7 @@ func grpcAuthRegistrar(r grpc.ServiceRegistrar, a app.App) {
 		registrationUrl,
 		verificationUrl,
 		resetPasswordUrl,
+		throttle,
 	)
 	authv1.RegisterAuthServiceServer(r, srv)
 }

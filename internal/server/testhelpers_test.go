@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/swayrider/authservice/internal/db"
 	"github.com/swayrider/authservice/internal/model"
@@ -81,7 +82,13 @@ func testServiceClient(scopes []string) *model.ServiceClientInternal {
 }
 
 func newTestServer(d Database, m MailSender) *AuthServer {
-	return NewAuthServer(d, log.New(), m, "from@example.com", "open", "", "", "")
+	return NewAuthServer(d, log.New(), m, "from@example.com", "open", "", "", "", ThrottleConfig{})
+}
+
+// newTestServerWithThrottle is like newTestServer but with throttling enabled,
+// for tests that specifically exercise lockout/cooldown behavior.
+func newTestServerWithThrottle(d Database, m MailSender, throttle ThrottleConfig) *AuthServer {
+	return NewAuthServer(d, log.New(), m, "from@example.com", "open", "", "", "", throttle)
 }
 
 // =============================================================================
@@ -92,6 +99,44 @@ type noopMailSender struct{}
 
 func (n *noopMailSender) SendTemplateInternal(_ *mailclient.TemplateMail) (string, error) {
 	return "", nil
+}
+
+// recordingMailSender records each send on a channel so tests can
+// synchronize with the async `go s.sendXxxEmail(...)` goroutines the
+// handlers spawn, instead of racing on a bare counter.
+type recordingMailSender struct {
+	calls chan *mailclient.TemplateMail
+}
+
+func newRecordingMailSender() *recordingMailSender {
+	return &recordingMailSender{calls: make(chan *mailclient.TemplateMail, 10)}
+}
+
+func (r *recordingMailSender) SendTemplateInternal(m *mailclient.TemplateMail) (string, error) {
+	r.calls <- m
+	return "", nil
+}
+
+// waitForSend blocks briefly for an async send; fails the test if none arrives.
+func (r *recordingMailSender) waitForSend(t *testing.T) *mailclient.TemplateMail {
+	t.Helper()
+	select {
+	case m := <-r.calls:
+		return m
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected an email to be sent, but none arrived")
+		return nil
+	}
+}
+
+// assertNoSend fails the test if a send arrives within a short window.
+func (r *recordingMailSender) assertNoSend(t *testing.T) {
+	t.Helper()
+	select {
+	case m := <-r.calls:
+		t.Fatalf("expected no email to be sent, but got one to %v", m.To)
+	case <-time.After(100 * time.Millisecond):
+	}
 }
 
 // =============================================================================
@@ -132,6 +177,9 @@ type mockDB struct {
 	isEmailInvitedFn              func(ctx context.Context, email string) (bool, error)
 	countInvitesFn                func(ctx context.Context, registered *bool) (int, error)
 	listInvitesFn                 func(ctx context.Context, page, pageSize int, registered *bool) ([]model.Invite, error)
+	isAttemptLockedFn             func(ctx context.Context, scope db.ThrottleScope, identifier string) (bool, error)
+	recordAttemptResultFn         func(ctx context.Context, scope db.ThrottleScope, identifier string, success bool, maxAttempts int, window, lockoutDuration time.Duration) error
+	tryConsumeEmailCooldownFn     func(ctx context.Context, scope db.ThrottleScope, identifier string, cooldown time.Duration) (bool, error)
 }
 
 func (m *mockDB) AdminExists(ctx context.Context) (bool, error) {
@@ -331,4 +379,22 @@ func (m *mockDB) ListInvites(ctx context.Context, page, pageSize int, registered
 		return m.listInvitesFn(ctx, page, pageSize, registered)
 	}
 	return nil, nil
+}
+func (m *mockDB) IsAttemptLocked(ctx context.Context, scope db.ThrottleScope, identifier string) (bool, error) {
+	if m.isAttemptLockedFn != nil {
+		return m.isAttemptLockedFn(ctx, scope, identifier)
+	}
+	return false, nil
+}
+func (m *mockDB) RecordAttemptResult(ctx context.Context, scope db.ThrottleScope, identifier string, success bool, maxAttempts int, window, lockoutDuration time.Duration) error {
+	if m.recordAttemptResultFn != nil {
+		return m.recordAttemptResultFn(ctx, scope, identifier, success, maxAttempts, window, lockoutDuration)
+	}
+	return nil
+}
+func (m *mockDB) TryConsumeEmailCooldown(ctx context.Context, scope db.ThrottleScope, identifier string, cooldown time.Duration) (bool, error) {
+	if m.tryConsumeEmailCooldownFn != nil {
+		return m.tryConsumeEmailCooldownFn(ctx, scope, identifier, cooldown)
+	}
+	return true, nil
 }
