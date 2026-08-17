@@ -153,7 +153,7 @@ type mockDB struct {
 	updatePasswordFn              func(ctx context.Context, userId, hashedPassword string) error
 	changeAccountLevelFn          func(ctx context.Context, userId, accountLevel string) error
 	createRefreshTokenFn          func(ctx context.Context, user *model.User, jwtID, ip, userAgent string) (*model.RefreshToken, error)
-	getRefreshTokenFn             func(ctx context.Context, token string) (*model.RefreshToken, error)
+	consumeRefreshTokenFn         func(ctx context.Context, token string) (*model.RefreshToken, error)
 	deleteRefreshTokenFn          func(ctx context.Context, token string) error
 	deleteRefreshTokensByUserIDFn func(ctx context.Context, userId string) error
 	createVerificationTokenFn     func(ctx context.Context, user *model.User) (*model.VerificationToken, error)
@@ -236,9 +236,9 @@ func (m *mockDB) CreateRefreshToken(ctx context.Context, user *model.User, jwtID
 	}
 	return &model.RefreshToken{Token: "mock-refresh-token"}, nil
 }
-func (m *mockDB) GetRefreshToken(ctx context.Context, token string) (*model.RefreshToken, error) {
-	if m.getRefreshTokenFn != nil {
-		return m.getRefreshTokenFn(ctx, token)
+func (m *mockDB) ConsumeRefreshToken(ctx context.Context, token string) (*model.RefreshToken, error) {
+	if m.consumeRefreshTokenFn != nil {
+		return m.consumeRefreshTokenFn(ctx, token)
 	}
 	return nil, db.ErrNoRefreshTokenFound
 }

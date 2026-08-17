@@ -53,31 +53,34 @@ func (d *DB) CreateRefreshToken(
 	return
 }
 
-// GetRefreshToken retrieves a refresh token by its token value.
-// Returns ErrNoRefreshTokenFound if the token doesn't exist.
-func (d *DB) GetRefreshToken(
+// ConsumeRefreshToken atomically retrieves and deletes a refresh token in a
+// single statement, so concurrent refreshes of the same token cannot both
+// succeed (only one DELETE finds a row; the other gets ErrNoRefreshTokenFound).
+// Returns ErrNoRefreshTokenFound if the token doesn't exist or was already consumed.
+func (d *DB) ConsumeRefreshToken(
 	ctx context.Context,
 	token string,
 ) (*model.RefreshToken, error) {
-	lg := d.lg.Derive(log.WithFunction("GetRefreshToken"))
+	lg := d.lg.Derive(log.WithFunction("ConsumeRefreshToken"))
 
 	if err := d.checkConnection(); err != nil {
-		lg.Warnf("GetRefreshToken: %v", err)
+		lg.Warnf("ConsumeRefreshToken: %v", err)
 		return nil, err
 	}
 
 	hash := model.HashToken(token)
 	var rt model.RefreshToken
 	err := d.QueryRowContext(ctx, `
-		SELECT user_id, jwtid, valid_until, created_ip, user_agent FROM refresh_tokens
+		DELETE FROM refresh_tokens
 		WHERE token_hash = $1
-	`, hash).Scan(&rt.UserId, &rt.JwtID, &rt.ValidUntil, &rt.Ip, &rt.UserAgent)
+		RETURNING user_id, jwtid, valid_until, revoked, created_ip, user_agent
+	`, hash).Scan(&rt.UserId, &rt.JwtID, &rt.ValidUntil, &rt.Revoked, &rt.Ip, &rt.UserAgent)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			lg.Debugf("no refresh token found")
 			return nil, ErrNoRefreshTokenFound
 		}
-		lg.Warnf("GetRefreshToken: %v", err)
+		lg.Warnf("ConsumeRefreshToken: %v", err)
 		return nil, err
 	}
 	return &rt, nil

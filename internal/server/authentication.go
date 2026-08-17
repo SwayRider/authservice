@@ -319,7 +319,9 @@ func (s *AuthServer) GetToken(
 //   - Token must be valid (not revoked/expired) and match the user agent
 //   - The IP is checked as a soft anomaly signal only: a mismatch is logged,
 //     never rejected (mobile clients legitimately change IP between requests)
-//   - Old token is deleted before new tokens are issued
+//   - The old token is atomically consumed (read-and-deleted in one statement)
+//     before verification, so it cannot be replayed by a concurrent request
+//     even if verification then fails
 //
 // Returns:
 //   - codes.Unauthenticated: If the refresh token is invalid or verification fails
@@ -338,10 +340,12 @@ func (s *AuthServer) Refresh(
 		refreshToken = req.RefreshToken
 	}
 
-	// Retrieve and validate the refresh token
-	token, err := s.DB().GetRefreshToken(ctx, refreshToken)
+	// Atomically retrieve and invalidate the refresh token (rotation). A
+	// single statement closes the TOCTOU window: concurrent refreshes of the
+	// same token cannot both succeed, since only one DELETE finds a row.
+	token, err := s.DB().ConsumeRefreshToken(ctx, refreshToken)
 	if err != nil {
-		lg.Errorf("could not get refresh token: %v", err)
+		lg.Errorf("could not consume refresh token: %v", err)
 		return nil, status.Errorf(
 			codes.Unauthenticated,
 			"could not get refresh token")
@@ -361,12 +365,6 @@ func (s *AuthServer) Refresh(
 	if !token.MatchesIP(origIp) {
 		lg.Warnf("refresh token IP mismatch user=%s stored=%q got=%q",
 			token.UserId, token.Ip, origIp)
-	}
-
-	// Invalidate the old refresh token (rotation)
-	err = s.DB().DeleteRefreshToken(ctx, refreshToken)
-	if err != nil {
-		lg.Warnf("could not delete refresh token: %v", err)
 	}
 
 	// Load user data for new token generation
