@@ -91,6 +91,27 @@ func newTestServerWithThrottle(d Database, m MailSender, throttle ThrottleConfig
 	return NewAuthServer(d, log.New(), m, "from@example.com", "open", "", "", "", throttle)
 }
 
+// newTestHealthServer creates a HealthServer that probes p, caching results
+// for probeTTL.
+func newTestHealthServer(p pinger, probeTTL time.Duration) *HealthServer {
+	return NewHealthServer(p, probeTTL, log.New())
+}
+
+// =============================================================================
+// mockPinger — implements pinger with a configurable function field
+// =============================================================================
+
+type mockPinger struct {
+	pingFn func(ctx context.Context) error
+}
+
+func (p *mockPinger) PingContext(ctx context.Context) error {
+	if p.pingFn != nil {
+		return p.pingFn(ctx)
+	}
+	return nil
+}
+
 // =============================================================================
 // noopMailSender
 // =============================================================================

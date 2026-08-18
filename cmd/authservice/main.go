@@ -35,17 +35,17 @@ import (
 	"time"
 
 	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
-	"google.golang.org/grpc"
-	"github.com/swayrider/grpcclients"
-	"github.com/swayrider/grpcclients/mailclient"
-	authv1 "github.com/swayrider/protos/auth/v1"
-	healthv1 "github.com/swayrider/protos/health/v1"
 	"github.com/swayrider/authservice/internal/db"
 	"github.com/swayrider/authservice/internal/server"
 	"github.com/swayrider/authservice/internal/web"
 	"github.com/swayrider/authservice/migrations"
+	"github.com/swayrider/grpcclients"
+	"github.com/swayrider/grpcclients/mailclient"
+	authv1 "github.com/swayrider/protos/auth/v1"
+	healthv1 "github.com/swayrider/protos/health/v1"
 	"github.com/swayrider/swlib/http/cookies"
 	log "github.com/swayrider/swlib/logger"
+	"google.golang.org/grpc"
 
 	"github.com/swayrider/swlib/app"
 	"github.com/swayrider/swlib/crypto"
@@ -159,6 +159,10 @@ const (
 	DefEmailIPMaxAttempts         = 20
 	DefEmailIPWindowSecs          = 900
 	DefEmailIPLockoutDurationSecs = 900
+
+	FldHealthProbeTtlSecs = "health-probe-ttl-secs"
+	EnvHealthProbeTTLSecs = "HEALTH_PROBE_TTL_SECS"
+	DefHealthProbeTtlSecs = 15
 )
 
 func main() {
@@ -167,7 +171,7 @@ func main() {
 	}
 
 	stdConfigFields :=
-			app.BackendServiceFields |
+		app.BackendServiceFields |
 			app.DatabaseConnectionFields |
 			app.WebServiceFields
 
@@ -228,6 +232,10 @@ func main() {
 			app.NewIntConfigField(
 				FldEmailIPLockoutDurationSecs, EnvEmailIPLockoutDurationSecs,
 				"Lockout duration (seconds) once the per-IP outbound email threshold is reached", DefEmailIPLockoutDurationSecs),
+			app.NewIntConfigField(
+				FldHealthProbeTtlSecs, EnvHealthProbeTTLSecs,
+				"How long in seconds a health probe result is cached before re-probing the database",
+				DefHealthProbeTtlSecs),
 		).
 		WithConfigFields(app.RateLimitConfigFields()...).
 		WithDatabase(dbCtor, dbBootstrap)
@@ -458,7 +466,8 @@ func grpcAuthRegistrar(r grpc.ServiceRegistrar, a app.App) {
 
 // grpcHealthRegistrar registers the HealthService gRPC server with the registrar.
 func grpcHealthRegistrar(r grpc.ServiceRegistrar, a app.App) {
-	srv := server.NewHealthServer(a.Logger())
+	probeTTLSecs := app.GetConfigField[int](a.Config(), FldHealthProbeTtlSecs)
+	srv := server.NewHealthServer(a.Database().SqlDB(), time.Duration(probeTTLSecs)*time.Second, a.Logger())
 	healthv1.RegisterHealthServiceServer(r, srv)
 }
 
