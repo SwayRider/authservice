@@ -46,7 +46,6 @@ import (
 	"github.com/swayrider/authservice/migrations"
 	"github.com/swayrider/swlib/http/cookies"
 	log "github.com/swayrider/swlib/logger"
-	"github.com/swayrider/swlib/ratelimit"
 
 	"github.com/swayrider/swlib/app"
 	"github.com/swayrider/swlib/crypto"
@@ -160,18 +159,6 @@ const (
 	DefEmailIPMaxAttempts         = 20
 	DefEmailIPWindowSecs          = 900
 	DefEmailIPLockoutDurationSecs = 900
-
-	FldRateLimitRPS         = "rate-limit-rps"
-	FldRateLimitBurst       = "rate-limit-burst"
-	FldRateLimitIdleTTLSecs = "rate-limit-idle-ttl-secs"
-
-	EnvRateLimitRPS         = "RATE_LIMIT_RPS"
-	EnvRateLimitBurst       = "RATE_LIMIT_BURST"
-	EnvRateLimitIdleTTLSecs = "RATE_LIMIT_IDLE_TTL_SECS"
-
-	DefRateLimitRPS         = 50
-	DefRateLimitBurst       = 100
-	DefRateLimitIdleTTLSecs = 300
 )
 
 func main() {
@@ -241,22 +228,9 @@ func main() {
 			app.NewIntConfigField(
 				FldEmailIPLockoutDurationSecs, EnvEmailIPLockoutDurationSecs,
 				"Lockout duration (seconds) once the per-IP outbound email threshold is reached", DefEmailIPLockoutDurationSecs),
-			app.NewIntConfigField(
-				FldRateLimitRPS, EnvRateLimitRPS,
-				"Sustained requests/sec allowed per peer IP on the raw gRPC port (coarse fallback safety net)", DefRateLimitRPS),
-			app.NewIntConfigField(
-				FldRateLimitBurst, EnvRateLimitBurst,
-				"Burst allowance per peer IP on the raw gRPC port", DefRateLimitBurst),
-			app.NewIntConfigField(
-				FldRateLimitIdleTTLSecs, EnvRateLimitIdleTTLSecs,
-				"Seconds of inactivity before a peer IP's rate-limit bucket is evicted", DefRateLimitIdleTTLSecs),
 		).
-		WithDatabase(dbCtor, dbBootstrap).
-		WithBackgroundRoutines(
-			keyChecker,
-			dbMaintenance,
-			rateLimitEvictor,
-		)
+		WithConfigFields(app.RateLimitConfigFields()...).
+		WithDatabase(dbCtor, dbBootstrap)
 
 	grpcConfig := app.NewGrpcConfig(
 		app.AuthInterceptor|app.ClientInfoInterceptor|app.RateLimitInterceptor,
@@ -280,60 +254,16 @@ func main() {
 	// once application.Run() starts -- so it's built via an initializer
 	// (runs after config parse, before startGrpc reads GrpcConfig.RateLimiter
 	// to build the interceptor chain) rather than here.
-	application = application.WithInitializers(rateLimiterInitializer(grpcConfig))
-	application = application.WithGrpc(grpcConfig)
-	application = application.WithHTTP(startWebServer, stopWebServer)
+	application = application.
+		WithBackgroundRoutines(
+			keyChecker,
+			dbMaintenance,
+			app.RateLimitEvictor(grpcConfig),
+		).
+		WithInitializers(app.RateLimiterInitializer(grpcConfig)).
+		WithGrpc(grpcConfig).
+		WithHTTP(startWebServer, stopWebServer)
 	application.Run()
-}
-
-// rateLimiter backs both the gRPC rate-limit interceptor and the eviction
-// background routine. Set once by rateLimiterInitializer during app startup
-// (before any background routine or the gRPC server start), then only read
-// afterward -- see the ordering note on rateLimiterInitializer.
-var rateLimiter *ratelimit.Limiter
-
-// rateLimiterInitializer returns an app.Callback that builds the rate
-// limiter from parsed config and attaches it to grpcConfig. It must run as
-// an initializer (after config parse, before startGrpc) since GrpcConfig's
-// interceptor chain is built from grpcConfig.RateLimiter at gRPC server
-// startup, and RATE_LIMIT_* values aren't available until config parsing
-// happens inside application.Run().
-func rateLimiterInitializer(grpcConfig *app.GrpcConfig) app.Callback {
-	return func(a app.App) error {
-		rps := app.GetConfigField[int](a.Config(), FldRateLimitRPS)
-		burst := app.GetConfigField[int](a.Config(), FldRateLimitBurst)
-		idleTTLSecs := app.GetConfigField[int](a.Config(), FldRateLimitIdleTTLSecs)
-		rateLimiter = ratelimit.New(float64(rps), burst, time.Duration(idleTTLSecs)*time.Second)
-		grpcConfig.SetRateLimiter(rateLimiter)
-		return nil
-	}
-}
-
-// rateLimitEvictor is a background routine that periodically prunes idle
-// per-IP buckets from rateLimiter, bounding memory under sustained,
-// high-cardinality traffic. Runs on a shorter interval than the hourly DB
-// maintenance since an in-memory map growing under a live attack needs
-// pruning quickly.
-func rateLimitEvictor(a app.App) {
-	lg := a.Logger().Derive(log.WithFunction("rateLimitEvictor"))
-	ctx := a.BackgroundContext()
-	defer func() {
-		a.BackgroundWaitGroup().Done()
-	}()
-
-	ticker := time.NewTicker(5 * time.Minute)
-	for {
-		select {
-		case <-ticker.C:
-			if rateLimiter != nil {
-				rateLimiter.Evict()
-			}
-		case <-ctx.Done():
-			lg.Infoln("stopping rate limit evictor")
-			ticker.Stop()
-			return
-		}
-	}
 }
 
 // mailServiceClientCtor creates a new mail service gRPC client.
