@@ -257,6 +257,7 @@ func main() {
 	)
 	grpcConfig.SetForwardResponseFn(server.CookieForwarder)
 	grpcConfig.SetHeaderMatcherFn(server.CookieHeaderMatcher)
+	grpcConfig.SetAllowCredentials(true)
 
 	// The rate limiter's thresholds come from config, which is only parsed
 	// once application.Run() starts -- so it's built via an initializer
