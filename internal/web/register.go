@@ -21,6 +21,7 @@ import (
 
 	passwordvalidator "github.com/wagslane/go-password-validator"
 	"github.com/swayrider/authservice/internal/db"
+	"github.com/swayrider/authservice/internal/svctoken"
 	"github.com/swayrider/grpcclients/mailclient"
 	"github.com/swayrider/swlib/crypto"
 	log "github.com/swayrider/swlib/logger"
@@ -184,7 +185,14 @@ func webSendVerificationEmail(
 		url.QueryEscape(userId),
 		url.QueryEscape(token.Token))
 
-	_, err = mailClient.SendTemplateInternal(
+	svcToken, err := svctoken.MailSendToken(ctx, dbConn)
+	if err != nil {
+		lg.Errorf("failed to mint mail service token: %v", err)
+		return
+	}
+
+	_, err = mailClient.SendTemplate(
+		svcToken,
 		mailclient.NewTemplateMail(
 			mailerAddress, []string{user.Email}, nil, nil,
 			"SwayRider - Confirm Email",

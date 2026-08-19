@@ -18,6 +18,7 @@ import (
 	"github.com/swayrider/grpcclients/mailclient"
 	authv1 "github.com/swayrider/protos/auth/v1"
 	"github.com/swayrider/authservice/internal/db"
+	"github.com/swayrider/authservice/internal/svctoken"
 	log "github.com/swayrider/swlib/logger"
 )
 
@@ -185,7 +186,14 @@ func (s *AuthServer) ListInvites(
 func (s *AuthServer) sendInviteEmail(email string) {
 	lg := s.Logger().Derive(log.WithFunction("sendInviteEmail"))
 
-	_, err := s.mailClient.SendTemplateInternal(
+	token, err := svctoken.MailSendToken(context.Background(), s.DB())
+	if err != nil {
+		lg.Errorf("failed to mint mail service token: %v", err)
+		return
+	}
+
+	_, err = s.mailClient.SendTemplate(
+		token,
 		mailclient.NewTemplateMail(
 			s.mailerAddress, []string{email}, nil, nil,
 			"SwayRider - You're invited",

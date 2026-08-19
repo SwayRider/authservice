@@ -19,11 +19,22 @@
 package server
 
 import (
+	"context"
+	"sync"
+	"time"
+
 	authv1 "github.com/swayrider/protos/auth/v1"
 	healthv1 "github.com/swayrider/protos/health/v1"
 	log "github.com/swayrider/swlib/logger"
 	"github.com/swayrider/swlib/security"
 )
+
+// pinger is satisfied by *sql.DB (via app.DB's SqlDB()); HealthServer only
+// needs to ping the database, not the full Database interface AuthServer
+// depends on.
+type pinger interface {
+	PingContext(ctx context.Context) error
+}
 
 // init registers all endpoint security configurations.
 // This determines which endpoints require authentication and at what level.
@@ -129,22 +140,32 @@ const registrationModeInviteOnly = "invite_only"
 // token management, and service client authentication.
 type AuthServer struct {
 	authv1.UnimplementedAuthServiceServer
-	dbConn           Database      // Database connection for user/token storage
-	mailClient       MailSender    // Client for sending verification/reset emails
-	mailerAddress    string        // From address for outgoing emails
-	registrationMode string        // "open" (default) or "invite_only"
-	registrationUrl  string        // Registration page URL sent in invite emails (REGISTRATION_URL)
-	verificationUrl  string        // Default verification URL when caller omits it (VERIFICATION_URL)
-	resetPasswordUrl string        // Default password-reset URL when caller omits it (RESET_PASSWORD_URL)
+	dbConn           Database       // Database connection for user/token storage
+	mailClient       MailSender     // Client for sending verification/reset emails
+	mailerAddress    string         // From address for outgoing emails
+	registrationMode string         // "open" (default) or "invite_only"
+	registrationUrl  string         // Registration page URL sent in invite emails (REGISTRATION_URL)
+	verificationUrl  string         // Default verification URL when caller omits it (VERIFICATION_URL)
+	resetPasswordUrl string         // Default password-reset URL when caller omits it (RESET_PASSWORD_URL)
 	throttle         ThrottleConfig // Account lockout / email cooldown thresholds
-	l                *log.Logger   // Logger instance
+	l                *log.Logger    // Logger instance
 }
 
 // HealthServer implements the HealthService gRPC interface.
 // It provides health check endpoints for monitoring and load balancing.
+//
+// Check() probes database reachability rather than reporting UP
+// unconditionally, caching the result for probeTTL to avoid pinging the
+// database on every orchestrator health check.
 type HealthServer struct {
 	healthv1.UnimplementedHealthServiceServer
-	l *log.Logger // Logger instance
+	db       pinger        // Database connection to probe
+	probeTTL time.Duration // How long a probe result is reused before re-probing
+	l        *log.Logger   // Logger instance
+
+	mu        sync.Mutex
+	lastCheck time.Time
+	lastUp    bool
 }
 
 // NewAuthServer creates a new AuthServer
@@ -184,9 +205,12 @@ func (s *AuthServer) Logger() *log.Logger {
 	return s.l
 }
 
-// NewHealthServer creates a new HealthServer
-func NewHealthServer(lgr *log.Logger) *HealthServer {
+// NewHealthServer creates a new HealthServer that probes db, caching the
+// result for probeTTL.
+func NewHealthServer(db pinger, probeTTL time.Duration, lgr *log.Logger) *HealthServer {
 	return &HealthServer{
+		db:       db,
+		probeTTL: probeTTL,
 		l: lgr.Derive(
 			log.WithComponent("HealthServer"),
 			log.WithFunction("NewHealthServer"),

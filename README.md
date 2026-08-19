@@ -134,6 +134,23 @@ Requires **Go 1.26.2** or later.
 | `MAILER_ADDRESS` | `-mailer-address` | `swayrider@example.com` | Outgoing email sender |
 | `REGISTRATION_MODE` | `-registration-mode` | `open` | Registration mode: `open` or `invite_only` |
 | `REGISTRATION_URL` | `-registration-url` | | Registration page URL — included in invite emails; required when `REGISTRATION_MODE=invite_only` |
+| `VERIFICATION_URL` | `-verification-url` | | Default URL for email verification (used when caller omits `verificationUrl`) |
+| `RESET_PASSWORD_URL` | `-reset-password-url` | | Default URL for password reset (used when caller omits `resetUrl`) |
+| `LOGIN_LOCKOUT_THRESHOLD` | `-login-lockout-threshold` | `5` | Failed logins before an account is locked out |
+| `LOGIN_LOCKOUT_WINDOW_SECS` | `-login-lockout-window-secs` | `900` | Window over which failed logins are counted |
+| `LOGIN_LOCKOUT_DURATION_SECS` | `-login-lockout-duration-secs` | `900` | How long an account stays locked out |
+| `CLIENT_LOCKOUT_THRESHOLD` | `-client-lockout-threshold` | `5` | Failed attempts before a service client is locked out |
+| `CLIENT_LOCKOUT_WINDOW_SECS` | `-client-lockout-window-secs` | `900` | Window over which failed client attempts are counted |
+| `CLIENT_LOCKOUT_DURATION_SECS` | `-client-lockout-duration-secs` | `900` | How long a service client stays locked out |
+| `EMAIL_COOLDOWN_SECS` | `-email-cooldown-secs` | `60` | Minimum time between verification/reset emails to the same address |
+| `EMAIL_IP_MAX_ATTEMPTS` | `-email-ip-max-attempts` | `20` | Max verification/reset email requests per source IP |
+| `EMAIL_IP_WINDOW_SECS` | `-email-ip-window-secs` | `900` | Window over which per-IP email requests are counted |
+| `EMAIL_IP_LOCKOUT_DURATION_SECS` | `-email-ip-lockout-duration-secs` | `900` | Lockout duration after per-IP email limit is exceeded |
+| `HEALTH_PROBE_TTL_SECS` | `-health-probe-ttl-secs` | `15` | How long a health probe result is cached |
+| `RATE_LIMIT_RPS` | `-rate-limit-rps` | `50` | Requests per second allowed per source IP |
+| `RATE_LIMIT_BURST` | `-rate-limit-burst` | `100` | Burst allowance per source IP |
+| `RATE_LIMIT_IDLE_TTL_SECS` | `-rate-limit-idle-ttl-secs` | `300` | How long an idle per-IP rate limiter entry is kept |
+| `COOKIE_NAMESPACE` | (env only) | | Overrides the cookie namespace prefix; unset uses the default namespace |
 
 ---
 
@@ -154,7 +171,7 @@ Service clients authenticate via the `GetToken` endpoint and are granted fine-gr
 ### Migrations
 
 ```bash
-cd backend/services/authservice
+cd authservice
 make migrate-up
 make migrate-status
 ```
@@ -209,6 +226,19 @@ swctl auth list-invites --auth-host … --user admin@… --password …
 # Build and push container (from authservice/ directory)
 make container-build
 ```
+
+### Tagging
+
+Tags are derived from the git state of the checkout:
+
+| Branch / state | Tags applied |
+|----------------|--------------|
+| Version-tagged commit (`v1.2.3`) | `v1.2.3`, `latest` |
+| `main` (untagged) | `v{last}-{date}-dev-b{N}`, `dev-latest` |
+| Other branch | `v{last}-{branch}-b{N}` |
+| Detached HEAD | `v{last}-{sha}-b{N}` |
+
+Non-release builds get an incrementing build number (`-b{N}`) so repeated builds of the same branch don't overwrite each other. The number comes from querying the registry for the highest existing `-b{N}` tag on the same base tag and adding 1; the build fails if the registry can't be reached. Release builds are immutable and never get a build number.
 
 ### FORCE_DEV_LATEST
 

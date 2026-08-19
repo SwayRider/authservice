@@ -22,6 +22,7 @@ import (
 	authv1 "github.com/swayrider/protos/auth/v1"
 	"github.com/swayrider/authservice/internal/db"
 	"github.com/swayrider/authservice/internal/model"
+	"github.com/swayrider/authservice/internal/svctoken"
 	"github.com/swayrider/swlib/crypto"
 	log "github.com/swayrider/swlib/logger"
 	"github.com/swayrider/swlib/security"
@@ -210,7 +211,14 @@ func (s *AuthServer) sendVerificationEmail(
 		return
 	}
 
-	_, err = s.mailClient.SendTemplateInternal(
+	svcToken, err := svctoken.MailSendToken(ctx, s.DB())
+	if err != nil {
+		lg.Errorf("failed to mint mail service token: %v", err)
+		return
+	}
+
+	_, err = s.mailClient.SendTemplate(
+		svcToken,
 		s.confirmEmailTemplate(
 			s.mailerAddress,
 			user.Email,
