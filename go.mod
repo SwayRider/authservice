@@ -10,7 +10,7 @@ require (
 	github.com/rubenv/sql-migrate v1.8.1
 	github.com/swayrider/grpcclients v0.1.7
 	github.com/swayrider/protos v0.1.4
-	github.com/swayrider/swlib v0.1.10-0.20260820152135-233faacd90fc
+	github.com/swayrider/swlib v0.1.10-0.20260821101343-2a72830a6e86
 	github.com/wagslane/go-password-validator v0.3.0
 	google.golang.org/grpc v1.80.0
 	google.golang.org/protobuf v1.36.11

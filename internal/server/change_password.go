@@ -82,6 +82,18 @@ func (s *AuthServer) ChangePassword(
 		return nil, status.Error(codes.Unauthenticated, "invalid old password")
 	}
 
+	if err := s.checkNotReused(ctx, user.ID, req.NewPassword); err != nil {
+		lg.Debugf("user %s change password rejected: %v", user.Email, err)
+		s.auditReusedPasswordRejected(ctx, strPtr(user.ID), user.Email)
+		return nil, err
+	}
+
+	if err := s.checkNotBreached(ctx, req.NewPassword); err != nil {
+		lg.Debugf("user %s change password rejected: %v", user.Email, err)
+		s.auditBreachedPasswordRejected(ctx, strPtr(user.ID), user.Email)
+		return nil, err
+	}
+
 	hashedPassword, err := crypto.CalculatePasswordHash(req.NewPassword)
 	if err != nil {
 		lg.Debugf("user password hashing error: %v", err)
@@ -92,6 +104,13 @@ func (s *AuthServer) ChangePassword(
 	if err != nil {
 		lg.Debugf("user %s failed to change password: %v", user.Email, err)
 		return nil, status.Errorf(codes.Internal, "failed to change password")
+	}
+
+	// Record the new hash in the password history so it cannot be reused
+	// later. Failures are log-only: history is a hardening feature, not a
+	// core-path dependency.
+	if err := s.DB().AddToPasswordHistory(ctx, user.ID, hashedPassword); err != nil {
+		lg.Warnf("user %s: failed to record password history: %v", user.Email, err)
 	}
 
 	// Revoke all active refresh tokens so a stolen token can't outlive the

@@ -46,8 +46,8 @@ github.com/swayrider/grpcclients v0.1.7 h1:UHiROrj7DlmF+Gnjggy/5WYkfZ3HGGEdy2GwX
 github.com/swayrider/grpcclients v0.1.7/go.mod h1:0FDREnII/CLzVAZsH2XPAqt1iy9vrAfRv5k136G3KYY=
 github.com/swayrider/protos v0.1.4 h1:e4AwAekgp59UUwNO/yKt17OEsgtY4raZ8k+yZH0UC6I=
 github.com/swayrider/protos v0.1.4/go.mod h1:e5VCOSgkeRKptyLYV0l351sdHpuzhnpN81UZT8LOXRg=
-github.com/swayrider/swlib v0.1.10-0.20260820152135-233faacd90fc h1:rt8qc8KB5o2badBFYkABEX4g59GspH+4A1UAVLVMj3E=
-github.com/swayrider/swlib v0.1.10-0.20260820152135-233faacd90fc/go.mod h1:7jvVAQUba1uvkk9zw0SgMTMWjI33HIlJdyev4gzKqbA=
+github.com/swayrider/swlib v0.1.10-0.20260821101343-2a72830a6e86 h1:7HuMH+9e//o827Paq1r4k6jbLEAX8sNPDmiHEhnVHX8=
+github.com/swayrider/swlib v0.1.10-0.20260821101343-2a72830a6e86/go.mod h1:7jvVAQUba1uvkk9zw0SgMTMWjI33HIlJdyev4gzKqbA=
 github.com/wagslane/go-password-validator v0.3.0 h1:vfxOPzGHkz5S146HDpavl0cw1DSVP061Ry2PX0/ON6I=
 github.com/wagslane/go-password-validator v0.3.0/go.mod h1:TI1XJ6T5fRdRnHqHt14pvy1tNVnrwe7m3/f1f2fDphQ=
 go.opentelemetry.io/auto/sdk v1.2.1 h1:jXsnJ4Lmnqd11kwkBV2LgLoFMZKizbCi5fNZ/ipaZ64=

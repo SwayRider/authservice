@@ -121,6 +121,18 @@ func (s *AuthServer) ResetPassword(
 			"password is too weak: %v", err)
 	}
 
+	if err := s.checkNotReused(ctx, user.ID, req.NewPassword); err != nil {
+		lg.Debugf("password reset rejected for user %s: %v", user.ID, err)
+		s.auditReusedPasswordRejected(ctx, strPtr(user.ID), user.Email)
+		return nil, err
+	}
+
+	if err := s.checkNotBreached(ctx, req.NewPassword); err != nil {
+		lg.Debugf("password reset rejected for user %s: %v", user.ID, err)
+		s.auditBreachedPasswordRejected(ctx, strPtr(user.ID), user.Email)
+		return nil, err
+	}
+
 	// Step 4: Hash and store new password
 	hashedPassword, err := crypto.CalculatePasswordHash(req.NewPassword)
 	if err != nil {
@@ -132,6 +144,13 @@ func (s *AuthServer) ResetPassword(
 	if err != nil {
 		lg.Debugf("failed to reset password for user: %s: %v", user.Email, err)
 		return nil, status.Errorf(codes.Internal, "failed to reset password")
+	}
+
+	// Record the new hash in the password history so it cannot be reused
+	// later. Failures are log-only: history is a hardening feature, not a
+	// core-path dependency.
+	if err := s.DB().AddToPasswordHistory(ctx, user.ID, hashedPassword); err != nil {
+		lg.Warnf("user %s: failed to record password history: %v", user.Email, err)
 	}
 
 	// Step 5: Revoke all active refresh tokens so a stolen token can't

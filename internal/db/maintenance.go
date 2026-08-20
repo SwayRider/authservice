@@ -69,5 +69,11 @@ func (d *DB) DoDatabaseMaintenance(ctx context.Context, auditRetentionDays, jwtK
 		return err
 	}
 
+	err = d.cleanupPasswordHistory(ctx)
+	if err != nil {
+		lg.Warnf("failed to cleanup password history: %v", err)
+		return err
+	}
+
 	return nil
 }

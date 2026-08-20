@@ -95,9 +95,15 @@ func New(
 		fmt.Sprintf("%s%s", prefix, "verify-user"),
 		verifyUser(dbConn, templates, lg),
 	)
+	var breached BreachedChecker
+	var audit AuditEmitter
+	if cfg != nil {
+		breached = cfg.Breached
+		audit = cfg.Audit
+	}
 	mux.HandleFunc(
 		fmt.Sprintf("%s%s", prefix, "reset-password"),
-		resetPassword(dbConn, templates, lg),
+		resetPassword(dbConn, templates, breached, audit, lg),
 	)
 	if cfg != nil {
 		mux.HandleFunc(

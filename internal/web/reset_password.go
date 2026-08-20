@@ -25,6 +25,8 @@ import (
 func resetPassword(
 	dbConn *db.DB,
 	templates *template.Template,
+	breached BreachedChecker,
+	audit AuditEmitter,
 	l *log.Logger,
 ) func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -85,6 +87,29 @@ func resetPassword(
 			return
 		}
 
+		// Breach check runs right after the cheap local validations and
+		// before any database work, mirroring the register handler -- it
+		// fails open, so a token that turns out to be invalid below is still
+		// reported as such.
+		if breached != nil {
+			isBreached, _, err := breached.IsBreached(r.Context(), newPassword)
+			if err != nil {
+				lg.Debugf("breach check failed, allowing password (fail open): %v", err)
+			} else if isBreached {
+				if audit != nil {
+					ip, ua := auditClientInfo(r)
+					audit.Emit(db.AuditEvent{
+						EventType: db.AuditPasswordBreachedRejected,
+						UserID:    &userId,
+						IPAddress: ip,
+						UserAgent: ua,
+					})
+				}
+				renderForm("reset_password_breached")
+				return
+			}
+		}
+
 		ctx := r.Context()
 
 		user, err := dbConn.GetUserByID(ctx, userId)
@@ -113,6 +138,26 @@ func resetPassword(
 			return
 		}
 
+		// Reject reuse of a recent password. Fails open on a DB error so a
+		// history outage never blocks a legitimate reset.
+		reused, err := dbConn.CheckPasswordReuse(ctx, user.ID, newPassword)
+		if err != nil {
+			lg.Debugf("password reuse check failed, allowing (fail open): %v", err)
+		} else if reused {
+			if audit != nil {
+				ip, ua := auditClientInfo(r)
+				audit.Emit(db.AuditEvent{
+					EventType: db.AuditPasswordReuseRejected,
+					UserID:    &user.ID,
+					Email:     user.Email,
+					IPAddress: ip,
+					UserAgent: ua,
+				})
+			}
+			renderForm("reset_password_reused")
+			return
+		}
+
 		hashedPassword, err := crypto.CalculatePasswordHash(newPassword)
 		if err != nil {
 			lg.Errorf("failed to hash password for user %s: %v", userId, err)
@@ -124,6 +169,11 @@ func resetPassword(
 			lg.Errorf("failed to update password for user %s: %v", userId, err)
 			renderForm("reset_password_error")
 			return
+		}
+
+		// Record the new hash in the password history. Failures are log-only.
+		if err := dbConn.AddToPasswordHistory(ctx, user.ID, hashedPassword); err != nil {
+			lg.Warnf("failed to record password history for user %s: %v", user.ID, err)
 		}
 
 		if err := dbConn.DeleteResetPasswordToken(ctx, user.ID); err != nil {
