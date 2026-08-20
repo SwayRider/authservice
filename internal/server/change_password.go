@@ -100,6 +100,8 @@ func (s *AuthServer) ChangePassword(
 		lg.Warnf("user %s: failed to revoke refresh tokens after password change: %v", user.Email, err)
 	}
 
+	s.auditPasswordChange(ctx, user.ID, user.Email)
+
 	return &authv1.ChangePasswordResponse{
 		Message: "Password changed successfully",
 	}, nil

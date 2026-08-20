@@ -148,6 +148,7 @@ func (s *AuthServer) Login(
 		lg.Debugf("user %s failed a login attempt: %v", req.Email, err)
 		if errors.Is(err, db.ErrUserNotFound) {
 			s.recordLoginAttempt(ctx, identifier, false)
+			s.auditLoginFailure(ctx, req.Email, "user_not_found")
 			return nil, status.Error(
 				codes.Unauthenticated,
 				"invalid email or password")
@@ -161,6 +162,7 @@ func (s *AuthServer) Login(
 	if !u.PasswordHash.Valid {
 		lg.Debugf("user %s failed a login attempt: invalid password", req.Email)
 		s.recordLoginAttempt(ctx, identifier, false)
+		s.auditLoginFailure(ctx, req.Email, "invalid_password_state")
 		return nil, status.Error(
 			codes.Unauthenticated,
 			"invalid email or password")
@@ -171,6 +173,7 @@ func (s *AuthServer) Login(
 	if err != nil {
 		lg.Debugf("user %s failed a login attempt: %v", req.Email, err)
 		s.recordLoginAttempt(ctx, identifier, false)
+		s.auditLoginFailure(ctx, req.Email, "verify_error")
 		return nil, status.Error(
 			codes.Unauthenticated,
 			"invalid email or password")
@@ -178,12 +181,14 @@ func (s *AuthServer) Login(
 	if !passwordOk {
 		lg.Debugf("user %s failed a login attempt: invalid password", req.Email)
 		s.recordLoginAttempt(ctx, identifier, false)
+		s.auditLoginFailure(ctx, req.Email, "wrong_password")
 		return nil, status.Error(
 			codes.Unauthenticated,
 			"invalid email or password")
 	}
 
 	s.recordLoginAttempt(ctx, identifier, true)
+	s.auditLoginSuccess(ctx, u.ID, u.Email)
 
 	origIp, _ := security.GetOrigIp(ctx)
 	userAgent, _ := security.GetUserAgent(ctx)
@@ -233,6 +238,7 @@ func (s *AuthServer) Logout(
 			"could not delete refresh token")
 	}
 
+	s.auditLogout(ctx)
 	return &authv1.LogoutResponse{}, nil
 }
 
@@ -267,6 +273,7 @@ func (s *AuthServer) GetToken(
 		lg.Debugf("service client %s not found: %v", req.ClientId, err)
 		if errors.Is(err, db.ErrServiceClientNotFound) {
 			s.recordClientAttempt(ctx, req.ClientId, false)
+			s.auditServiceClientAuth(ctx, req.ClientId, false, "client_not_found")
 			return nil, status.Error(
 				codes.Unauthenticated,
 				"service client authentication error")
@@ -278,6 +285,7 @@ func (s *AuthServer) GetToken(
 	if !clnt.ClientSecretHash.Valid {
 		lg.Debugf("service client %s not found: invalid secret", req.ClientId)
 		s.recordClientAttempt(ctx, req.ClientId, false)
+		s.auditServiceClientAuth(ctx, req.ClientId, false, "invalid_secret_state")
 		return nil, status.Error(
 			codes.Unauthenticated,
 			"service client authentication error")
@@ -289,6 +297,7 @@ func (s *AuthServer) GetToken(
 	if err != nil {
 		lg.Debugf("service client %s authentication error: %v", req.ClientId, err)
 		s.recordClientAttempt(ctx, req.ClientId, false)
+		s.auditServiceClientAuth(ctx, req.ClientId, false, "verify_error")
 		return nil, status.Error(
 			codes.Unauthenticated,
 			"service client authentication error")
@@ -296,12 +305,14 @@ func (s *AuthServer) GetToken(
 	if !secretOk {
 		lg.Debugf("service client %s authentication error: invalid secret", req.ClientId)
 		s.recordClientAttempt(ctx, req.ClientId, false)
+		s.auditServiceClientAuth(ctx, req.ClientId, false, "wrong_secret")
 		return nil, status.Error(
 			codes.Unauthenticated,
 			"service client authentication error")
 	}
 
 	s.recordClientAttempt(ctx, req.ClientId, true)
+	s.auditServiceClientAuth(ctx, req.ClientId, true, "")
 
 	accessToken, validUntil, grantedScopes, err := s.createServiceToken(ctx, clnt, req.Scopes)
 	if err != nil {
@@ -353,6 +364,7 @@ func (s *AuthServer) Refresh(
 	token, err := s.DB().ConsumeRefreshToken(ctx, refreshToken)
 	if err != nil {
 		lg.Errorf("could not consume refresh token: %v", err)
+		s.auditRefreshFailure(ctx, nil, "token_not_found")
 		return nil, status.Errorf(
 			codes.Unauthenticated,
 			"could not get refresh token")
@@ -365,6 +377,7 @@ func (s *AuthServer) Refresh(
 	err = token.Verify(userAgent)
 	if err != nil {
 		lg.Errorf("could not verify refresh token: %v", err)
+		s.auditRefreshFailure(ctx, &token.UserId, "verify_failed")
 		return nil, status.Errorf(
 			codes.Unauthenticated,
 			"could not verify refresh token")
@@ -392,6 +405,7 @@ func (s *AuthServer) Refresh(
 	}
 
 	lg.Debugf("user refreshed with ID: %s", user.ID)
+	s.auditRefreshSuccess(ctx, user.ID)
 	return &authv1.RefreshResponse{
 		AccessToken:  string(accessToken),
 		RefreshToken: newRefreshToken.Token,

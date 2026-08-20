@@ -112,10 +112,10 @@ func TestRequestPasswordReset_UsesEmailSendByIPScope(t *testing.T) {
 	var gotScope db.ThrottleScope
 	var gotIdentifier string
 	mdb := &mockDB{
-		recordAttemptResultFn: func(_ context.Context, scope db.ThrottleScope, identifier string, _ bool, _ int, _, _ time.Duration) error {
+		recordAttemptResultFn: func(_ context.Context, scope db.ThrottleScope, identifier string, _ bool, _ int, _, _ time.Duration) (bool, error) {
 			gotScope = scope
 			gotIdentifier = identifier
-			return nil
+			return false, nil
 		},
 	}
 	srv := newTestServerWithThrottle(mdb, &noopMailSender{}, testThrottleConfig())

@@ -22,9 +22,10 @@
 //
 // # Background Routines
 //
-// Two background goroutines run continuously:
+// Background goroutines run continuously:
 //   - keyChecker: Rotates JWT signing keys before expiration (hourly check)
-//   - dbMaintenance: Cleans up expired tokens (hourly)
+//   - dbMaintenance: Cleans up expired tokens and stale audit_log rows (hourly)
+//   - auditFlusher: Drains the async audit_log writer to the database
 package main
 
 import (
@@ -32,6 +33,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
@@ -163,6 +165,15 @@ const (
 	FldHealthProbeTtlSecs = "health-probe-ttl-secs"
 	EnvHealthProbeTTLSecs = "HEALTH_PROBE_TTL_SECS"
 	DefHealthProbeTtlSecs = 15
+
+	FldAuditRetentionDays = "audit-retention-days"
+	FldAuditBufferSize    = "audit-buffer-size"
+
+	EnvAuditRetentionDays = "AUDIT_RETENTION_DAYS"
+	EnvAuditBufferSize    = "AUDIT_BUFFER_SIZE"
+
+	DefAuditRetentionDays = 90
+	DefAuditBufferSize    = 1000
 )
 
 func main() {
@@ -236,6 +247,14 @@ func main() {
 				FldHealthProbeTtlSecs, EnvHealthProbeTTLSecs,
 				"How long in seconds a health probe result is cached before re-probing the database",
 				DefHealthProbeTtlSecs),
+			app.NewIntConfigField(
+				FldAuditRetentionDays, EnvAuditRetentionDays,
+				"Days to retain audit_log rows before the hourly maintenance routine deletes them",
+				DefAuditRetentionDays),
+			app.NewIntConfigField(
+				FldAuditBufferSize, EnvAuditBufferSize,
+				"Buffer size of the async audit_log writer; events are dropped (and a warning logged) if the buffer is full",
+				DefAuditBufferSize),
 		).
 		WithConfigFields(app.RateLimitConfigFields()...).
 		WithDatabase(dbCtor, dbBootstrap)
@@ -267,6 +286,7 @@ func main() {
 		WithBackgroundRoutines(
 			keyChecker,
 			dbMaintenance,
+			auditFlusher,
 			app.RateLimitEvictor(grpcConfig),
 		).
 		WithInitializers(app.RateLimiterInitializer(grpcConfig)).
@@ -398,13 +418,15 @@ func keyChecker(a app.App) {
 	}
 }
 
-// dbMaintenance is a background routine that cleans up expired tokens.
-// It runs hourly and removes expired refresh tokens, verification tokens,
-// and password reset tokens from the database.
+// dbMaintenance is a background routine that cleans up expired tokens and
+// stale audit_log rows. It runs hourly and removes expired refresh tokens,
+// verification tokens, password reset tokens, and audit_log rows older than
+// AUDIT_RETENTION_DAYS from the database.
 func dbMaintenance(a app.App) {
 	lg := a.Logger().Derive(log.WithFunction("dbMaintenance"))
 	dbconn := a.Database().(*db.DB)
 	ctx := a.BackgroundContext()
+	auditRetentionDays := app.GetConfigField[int](a.Config(), FldAuditRetentionDays)
 	defer func() {
 		a.BackgroundWaitGroup().Done()
 	}()
@@ -413,12 +435,71 @@ func dbMaintenance(a app.App) {
 	for {
 		select {
 		case <-ticker.C:
-			if err := dbconn.DoDatabaseMaintenance(ctx); err != nil {
+			if err := dbconn.DoDatabaseMaintenance(ctx, auditRetentionDays); err != nil {
 				lg.Errorf("failed to run db maintenance: %v", err)
 			}
 		case <-ctx.Done():
 			lg.Infoln("stopping db maintenance")
 			ticker.Stop()
+			return
+		}
+	}
+}
+
+// auditWriterOnce/auditWriterInst back sharedAuditWriter: the AuditWriter
+// must be a single shared instance between grpcAuthRegistrar (which hands it
+// to AuthServer for emitting events) and auditFlusher (which drains it to
+// the database), but swlib/app doesn't guarantee which of the two callbacks
+// runs first, and neither can read AUDIT_BUFFER_SIZE from config until
+// invoked by app.Run(). Lazy-init on first use sidesteps both problems.
+var (
+	auditWriterOnce sync.Once
+	auditWriterInst *server.AuditWriter
+)
+
+func sharedAuditWriter(a app.App) *server.AuditWriter {
+	auditWriterOnce.Do(func() {
+		bufSize := app.GetConfigField[int](a.Config(), FldAuditBufferSize)
+		auditWriterInst = server.NewAuditWriter(bufSize, a.Logger())
+	})
+	return auditWriterInst
+}
+
+// auditFlusher is a background routine that drains the shared AuditWriter's
+// buffer, writing each event to the database. Unlike keyChecker/dbMaintenance
+// it has no ticker -- it drains continuously as events arrive rather than on
+// an interval -- and performs a short bounded drain of any remaining
+// buffered events on shutdown before returning.
+func auditFlusher(a app.App) {
+	lg := a.Logger().Derive(log.WithFunction("auditFlusher"))
+	dbconn := a.Database().(*db.DB)
+	ch := sharedAuditWriter(a).Chan()
+	ctx := a.BackgroundContext()
+	defer func() {
+		a.BackgroundWaitGroup().Done()
+	}()
+
+	for {
+		select {
+		case ev := <-ch:
+			if err := dbconn.InsertAuditEvent(ctx, ev); err != nil {
+				lg.Warnf("failed to write audit event: %v", err)
+			}
+		case <-ctx.Done():
+			lg.Infoln("stopping audit flusher, draining buffered events")
+			drainCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+		drain:
+			for {
+				select {
+				case ev := <-ch:
+					if err := dbconn.InsertAuditEvent(drainCtx, ev); err != nil {
+						lg.Warnf("failed to write audit event during drain: %v", err)
+					}
+				default:
+					break drain
+				}
+			}
 			return
 		}
 	}
@@ -461,6 +542,7 @@ func grpcAuthRegistrar(r grpc.ServiceRegistrar, a app.App) {
 		verificationUrl,
 		resetPasswordUrl,
 		throttle,
+		sharedAuditWriter(a),
 	)
 	authv1.RegisterAuthServiceServer(r, srv)
 }

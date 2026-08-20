@@ -103,6 +103,7 @@ func (s *AuthServer) CheckVerificationToken(
 	}
 
 	lg.Debugf("User %s verified", req.UserId)
+	s.auditVerifyEmail(ctx, u.ID)
 
 	return &authv1.CheckVerificationTokenResponse{IsValid: true}, nil
 }

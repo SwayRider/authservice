@@ -82,13 +82,13 @@ func testServiceClient(scopes []string) *model.ServiceClientInternal {
 }
 
 func newTestServer(d Database, m MailSender) *AuthServer {
-	return NewAuthServer(d, log.New(), m, "from@example.com", "open", "", "", "", ThrottleConfig{})
+	return NewAuthServer(d, log.New(), m, "from@example.com", "open", "", "", "", ThrottleConfig{}, NewAuditWriter(10, log.New()))
 }
 
 // newTestServerWithThrottle is like newTestServer but with throttling enabled,
 // for tests that specifically exercise lockout/cooldown behavior.
 func newTestServerWithThrottle(d Database, m MailSender, throttle ThrottleConfig) *AuthServer {
-	return NewAuthServer(d, log.New(), m, "from@example.com", "open", "", "", "", throttle)
+	return NewAuthServer(d, log.New(), m, "from@example.com", "open", "", "", "", throttle, NewAuditWriter(10, log.New()))
 }
 
 // newTestHealthServer creates a HealthServer that probes p, caching results
@@ -199,8 +199,9 @@ type mockDB struct {
 	countInvitesFn                func(ctx context.Context, registered *bool) (int, error)
 	listInvitesFn                 func(ctx context.Context, page, pageSize int, registered *bool) ([]model.Invite, error)
 	isAttemptLockedFn             func(ctx context.Context, scope db.ThrottleScope, identifier string) (bool, error)
-	recordAttemptResultFn         func(ctx context.Context, scope db.ThrottleScope, identifier string, success bool, maxAttempts int, window, lockoutDuration time.Duration) error
+	recordAttemptResultFn         func(ctx context.Context, scope db.ThrottleScope, identifier string, success bool, maxAttempts int, window, lockoutDuration time.Duration) (bool, error)
 	tryConsumeEmailCooldownFn     func(ctx context.Context, scope db.ThrottleScope, identifier string, cooldown time.Duration) (bool, error)
+	insertAuditEventFn            func(ctx context.Context, ev db.AuditEvent) error
 }
 
 func (m *mockDB) AdminExists(ctx context.Context) (bool, error) {
@@ -407,15 +408,21 @@ func (m *mockDB) IsAttemptLocked(ctx context.Context, scope db.ThrottleScope, id
 	}
 	return false, nil
 }
-func (m *mockDB) RecordAttemptResult(ctx context.Context, scope db.ThrottleScope, identifier string, success bool, maxAttempts int, window, lockoutDuration time.Duration) error {
+func (m *mockDB) RecordAttemptResult(ctx context.Context, scope db.ThrottleScope, identifier string, success bool, maxAttempts int, window, lockoutDuration time.Duration) (bool, error) {
 	if m.recordAttemptResultFn != nil {
 		return m.recordAttemptResultFn(ctx, scope, identifier, success, maxAttempts, window, lockoutDuration)
 	}
-	return nil
+	return false, nil
 }
 func (m *mockDB) TryConsumeEmailCooldown(ctx context.Context, scope db.ThrottleScope, identifier string, cooldown time.Duration) (bool, error) {
 	if m.tryConsumeEmailCooldownFn != nil {
 		return m.tryConsumeEmailCooldownFn(ctx, scope, identifier, cooldown)
 	}
 	return true, nil
+}
+func (m *mockDB) InsertAuditEvent(ctx context.Context, ev db.AuditEvent) error {
+	if m.insertAuditEventFn != nil {
+		return m.insertAuditEventFn(ctx, ev)
+	}
+	return nil
 }

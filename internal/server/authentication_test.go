@@ -375,12 +375,12 @@ func TestLogin_RecordsFailureOnUserNotFound(t *testing.T) {
 		getUserByEmailFn: func(_ context.Context, _ string) (*model.UserInternal, error) {
 			return nil, db.ErrUserNotFound
 		},
-		recordAttemptResultFn: func(_ context.Context, scope db.ThrottleScope, identifier string, success bool, _ int, _, _ time.Duration) error {
+		recordAttemptResultFn: func(_ context.Context, scope db.ThrottleScope, identifier string, success bool, _ int, _, _ time.Duration) (bool, error) {
 			if scope != db.ScopeLogin || identifier != "nobody@example.com" {
 				t.Errorf("unexpected scope/identifier: %v/%s", scope, identifier)
 			}
 			recordedSuccess = &success
-			return nil
+			return false, nil
 		},
 	}
 	srv := newTestServerWithThrottle(mdb, &noopMailSender{}, testThrottleConfig())
@@ -404,9 +404,9 @@ func TestLogin_RecordsFailureOnWrongPassword(t *testing.T) {
 		getUserByEmailFn: func(_ context.Context, _ string) (*model.UserInternal, error) {
 			return testUser(), nil
 		},
-		recordAttemptResultFn: func(_ context.Context, _ db.ThrottleScope, _ string, success bool, _ int, _, _ time.Duration) error {
+		recordAttemptResultFn: func(_ context.Context, _ db.ThrottleScope, _ string, success bool, _ int, _, _ time.Duration) (bool, error) {
 			recordedSuccess = &success
-			return nil
+			return false, nil
 		},
 	}
 	srv := newTestServerWithThrottle(mdb, &noopMailSender{}, testThrottleConfig())
@@ -430,9 +430,9 @@ func TestLogin_DoesNotRecordOnInternalDBError(t *testing.T) {
 		getUserByEmailFn: func(_ context.Context, _ string) (*model.UserInternal, error) {
 			return nil, errors.New("connection refused")
 		},
-		recordAttemptResultFn: func(_ context.Context, _ db.ThrottleScope, _ string, _ bool, _ int, _, _ time.Duration) error {
+		recordAttemptResultFn: func(_ context.Context, _ db.ThrottleScope, _ string, _ bool, _ int, _, _ time.Duration) (bool, error) {
 			recordCalled = true
-			return nil
+			return false, nil
 		},
 	}
 	srv := newTestServerWithThrottle(mdb, &noopMailSender{}, testThrottleConfig())
@@ -454,12 +454,12 @@ func TestLogin_RecordsSuccessOnCorrectCredentials(t *testing.T) {
 		getUserByEmailFn: func(_ context.Context, _ string) (*model.UserInternal, error) {
 			return testUser(), nil
 		},
-		recordAttemptResultFn: func(_ context.Context, scope db.ThrottleScope, _ string, success bool, _ int, _, _ time.Duration) error {
+		recordAttemptResultFn: func(_ context.Context, scope db.ThrottleScope, _ string, success bool, _ int, _, _ time.Duration) (bool, error) {
 			if scope != db.ScopeLogin {
 				t.Errorf("unexpected scope: %v", scope)
 			}
 			recordedSuccess = &success
-			return nil
+			return false, nil
 		},
 	}
 	srv := newTestServerWithThrottle(mdb, &noopMailSender{}, testThrottleConfig())
@@ -878,12 +878,12 @@ func TestGetToken_RecordsFailureOnClientNotFound(t *testing.T) {
 		getServiceClientByIDFn: func(_ context.Context, _ string) (*model.ServiceClientInternal, error) {
 			return nil, db.ErrServiceClientNotFound
 		},
-		recordAttemptResultFn: func(_ context.Context, scope db.ThrottleScope, identifier string, success bool, _ int, _, _ time.Duration) error {
+		recordAttemptResultFn: func(_ context.Context, scope db.ThrottleScope, identifier string, success bool, _ int, _, _ time.Duration) (bool, error) {
 			if scope != db.ScopeGetToken || identifier != "unknown" {
 				t.Errorf("unexpected scope/identifier: %v/%s", scope, identifier)
 			}
 			recordedSuccess = &success
-			return nil
+			return false, nil
 		},
 	}
 	srv := newTestServerWithThrottle(mdb, &noopMailSender{}, testThrottleConfig())
@@ -907,9 +907,9 @@ func TestGetToken_RecordsFailureOnWrongSecret(t *testing.T) {
 		getServiceClientByIDFn: func(_ context.Context, _ string) (*model.ServiceClientInternal, error) {
 			return testServiceClient([]string{"read"}), nil
 		},
-		recordAttemptResultFn: func(_ context.Context, _ db.ThrottleScope, _ string, success bool, _ int, _, _ time.Duration) error {
+		recordAttemptResultFn: func(_ context.Context, _ db.ThrottleScope, _ string, success bool, _ int, _, _ time.Duration) (bool, error) {
 			recordedSuccess = &success
-			return nil
+			return false, nil
 		},
 	}
 	srv := newTestServerWithThrottle(mdb, &noopMailSender{}, testThrottleConfig())
@@ -933,9 +933,9 @@ func TestGetToken_DoesNotRecordOnInternalDBError(t *testing.T) {
 		getServiceClientByIDFn: func(_ context.Context, _ string) (*model.ServiceClientInternal, error) {
 			return nil, errors.New("connection refused")
 		},
-		recordAttemptResultFn: func(_ context.Context, _ db.ThrottleScope, _ string, _ bool, _ int, _, _ time.Duration) error {
+		recordAttemptResultFn: func(_ context.Context, _ db.ThrottleScope, _ string, _ bool, _ int, _, _ time.Duration) (bool, error) {
 			recordCalled = true
-			return nil
+			return false, nil
 		},
 	}
 	srv := newTestServerWithThrottle(mdb, &noopMailSender{}, testThrottleConfig())
@@ -956,12 +956,12 @@ func TestGetToken_RecordsSuccessOnCorrectCredentials(t *testing.T) {
 		getServiceClientByIDFn: func(_ context.Context, _ string) (*model.ServiceClientInternal, error) {
 			return testServiceClient([]string{"read"}), nil
 		},
-		recordAttemptResultFn: func(_ context.Context, scope db.ThrottleScope, _ string, success bool, _ int, _, _ time.Duration) error {
+		recordAttemptResultFn: func(_ context.Context, scope db.ThrottleScope, _ string, success bool, _ int, _, _ time.Duration) (bool, error) {
 			if scope != db.ScopeGetToken {
 				t.Errorf("unexpected scope: %v", scope)
 			}
 			recordedSuccess = &success
-			return nil
+			return false, nil
 		},
 	}
 	srv := newTestServerWithThrottle(mdb, &noopMailSender{}, testThrottleConfig())

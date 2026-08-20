@@ -123,6 +123,7 @@ func (s *AuthServer) Register(
 		return nil, status.Errorf(codes.Internal, "registration error")
 	}
 	lg.Debugf("user registered with ID: %s", userid)
+	s.auditRegister(ctx, userid, req.Email)
 
 	if s.registrationMode == registrationModeInviteOnly {
 		if err := s.DB().ConsumeInvite(ctx, req.Email); err != nil {
