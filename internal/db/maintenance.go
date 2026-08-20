@@ -13,8 +13,8 @@ import (
 
 // DoDatabaseMaintenance does database maintenance tasks. auditRetentionDays
 // controls how far back audit_log rows are kept before cleanupAuditLog
-// deletes them.
-func (d *DB) DoDatabaseMaintenance(ctx context.Context, auditRetentionDays int) error {
+// deletes them; jwtKeyRetentionDays does the same for expired jwt_keys rows.
+func (d *DB) DoDatabaseMaintenance(ctx context.Context, auditRetentionDays, jwtKeyRetentionDays int) error {
 	lg := d.lg.Derive(log.WithFunction("DoDatabaseMaintenance"))
 
 	if err := d.checkConnection(); err != nil {
@@ -60,6 +60,12 @@ func (d *DB) DoDatabaseMaintenance(ctx context.Context, auditRetentionDays int) 
 	err = d.cleanupAuditLog(ctx, auditRetentionDays)
 	if err != nil {
 		lg.Warnf("failed to cleanup audit log: %v", err)
+		return err
+	}
+
+	err = d.cleanupExpiredJwtKeys(ctx, jwtKeyRetentionDays)
+	if err != nil {
+		lg.Warnf("failed to cleanup expired jwt keys: %v", err)
 		return err
 	}
 

@@ -51,6 +51,8 @@ import (
 
 	"github.com/swayrider/swlib/app"
 	"github.com/swayrider/swlib/crypto"
+	"github.com/swayrider/swlib/encryption"
+	flg "github.com/swayrider/swlib/flag"
 )
 
 /*
@@ -174,7 +176,24 @@ const (
 
 	DefAuditRetentionDays = 90
 	DefAuditBufferSize    = 1000
+
+	FldJwtKeyRetentionDays = "jwt-key-retention-days"
+	EnvJwtKeyRetentionDays = "JWT_KEY_RETENTION_DAYS"
+	DefJwtKeyRetentionDays = 7
+
+	FldEncryptionMasterKey         = "encryption-master-key"
+	FldEncryptionMasterKeyPrevious = "encryption-master-key-previous"
+
+	EnvEncryptionMasterKey         = "ENCRYPTION_MASTER_KEY"
+	EnvEncryptionMasterKeyPrevious = "ENCRYPTION_MASTER_KEY_PREVIOUS"
+
+	DefEncryptionMasterKey = ""
 )
+
+// DefEncryptionMasterKeyPrevious is the default for FldEncryptionMasterKeyPrevious:
+// no retired master keys configured. Not a const, since ConfigField defaults
+// for string-array fields are typed []string.
+var DefEncryptionMasterKeyPrevious []string
 
 func main() {
 	if ns := os.Getenv("COOKIE_NAMESPACE"); ns != "" {
@@ -255,6 +274,18 @@ func main() {
 				FldAuditBufferSize, EnvAuditBufferSize,
 				"Buffer size of the async audit_log writer; events are dropped (and a warning logged) if the buffer is full",
 				DefAuditBufferSize),
+			app.NewIntConfigField(
+				FldJwtKeyRetentionDays, EnvJwtKeyRetentionDays,
+				"Days an expired jwt_keys row is kept (forensics/clock-skew margin) before the hourly maintenance routine deletes it",
+				DefJwtKeyRetentionDays),
+			app.NewStringConfigField(
+				FldEncryptionMasterKey, EnvEncryptionMasterKey,
+				"Base64-encoded 256-bit master key used to encrypt the JWT signing private key at rest (required; generate with `openssl rand -base64 32`)",
+				DefEncryptionMasterKey),
+			app.NewStringArrConfigField(
+				FldEncryptionMasterKeyPrevious, EnvEncryptionMasterKeyPrevious,
+				"Comma-separated list of retired base64-encoded master keys, used only to decrypt jwt_keys rows encrypted before a master key rotation",
+				DefEncryptionMasterKeyPrevious),
 		).
 		WithConfigFields(app.RateLimitConfigFields()...).
 		WithDatabase(dbCtor, dbBootstrap)
@@ -320,6 +351,25 @@ func dbCtor(a app.App) app.DB {
 		DBName:   app.GetConfigField[string](a.Config(), app.KeyDBName),
 		SSLMode:  app.GetConfigField[string](a.Config(), app.KeyDBSSLMode),
 	}
+
+	rawKey := app.GetConfigField[string](a.Config(), FldEncryptionMasterKey)
+	masterKey, err := encryption.ParseMasterKey(rawKey)
+	if err != nil {
+		lg.Fatalf("invalid %s: %v", EnvEncryptionMasterKey, err)
+	}
+
+	var previousKeys [][]byte
+	for _, raw := range app.GetConfigField[flg.StringArr](a.Config(), FldEncryptionMasterKeyPrevious) {
+		if raw == "" {
+			continue // unset case: GetAsStringArr on an empty fallback yields [""]
+		}
+		prevKey, err := encryption.ParseMasterKey(raw)
+		if err != nil {
+			lg.Fatalf("invalid entry in %s: %v", EnvEncryptionMasterKeyPrevious, err)
+		}
+		previousKeys = append(previousKeys, prevKey)
+	}
+	cfg.EncryptionKeyRing = encryption.NewKeyRing(masterKey, previousKeys)
 
 	if err := db.EnsureDatabase(cfg, a.Logger()); err != nil {
 		lg.Fatalf("failed to ensure database exists: %v", err)
@@ -418,15 +468,17 @@ func keyChecker(a app.App) {
 	}
 }
 
-// dbMaintenance is a background routine that cleans up expired tokens and
-// stale audit_log rows. It runs hourly and removes expired refresh tokens,
-// verification tokens, password reset tokens, and audit_log rows older than
-// AUDIT_RETENTION_DAYS from the database.
+// dbMaintenance is a background routine that cleans up expired tokens,
+// stale audit_log rows, and expired jwt_keys rows. It runs hourly and
+// removes expired refresh tokens, verification tokens, password reset
+// tokens, audit_log rows older than AUDIT_RETENTION_DAYS, and jwt_keys rows
+// expired more than JWT_KEY_RETENTION_DAYS ago from the database.
 func dbMaintenance(a app.App) {
 	lg := a.Logger().Derive(log.WithFunction("dbMaintenance"))
 	dbconn := a.Database().(*db.DB)
 	ctx := a.BackgroundContext()
 	auditRetentionDays := app.GetConfigField[int](a.Config(), FldAuditRetentionDays)
+	jwtKeyRetentionDays := app.GetConfigField[int](a.Config(), FldJwtKeyRetentionDays)
 	defer func() {
 		a.BackgroundWaitGroup().Done()
 	}()
@@ -435,7 +487,7 @@ func dbMaintenance(a app.App) {
 	for {
 		select {
 		case <-ticker.C:
-			if err := dbconn.DoDatabaseMaintenance(ctx, auditRetentionDays); err != nil {
+			if err := dbconn.DoDatabaseMaintenance(ctx, auditRetentionDays, jwtKeyRetentionDays); err != nil {
 				lg.Errorf("failed to run db maintenance: %v", err)
 			}
 		case <-ctx.Done():

@@ -21,7 +21,7 @@ The authservice is the **single source of truth** for:
 The following invariants are **non-negotiable**:
 - Passwords are **never stored or logged** in plaintext
 - Refresh tokens are **single-use** and stored **hashed**
-- JWTs are **RS256-signed** with rotating keys
+- JWTs are **RS256-signed** with rotating keys; the private key is **AES-256-GCM-encrypted at rest**, keyed by `ENCRYPTION_MASTER_KEY`
 - JWT verification must work across key rotation
 - All protected endpoints are guarded by interceptors
 
@@ -151,6 +151,9 @@ Requires **Go 1.26.2** or later.
 | `RATE_LIMIT_BURST` | `-rate-limit-burst` | `100` | Burst allowance per source IP |
 | `RATE_LIMIT_IDLE_TTL_SECS` | `-rate-limit-idle-ttl-secs` | `300` | How long an idle per-IP rate limiter entry is kept |
 | `COOKIE_NAMESPACE` | (env only) | | Overrides the cookie namespace prefix; unset uses the default namespace |
+| `ENCRYPTION_MASTER_KEY` | `-encryption-master-key` | | **Required.** Base64-encoded 256-bit key encrypting the JWT signing private key at rest; generate with `openssl rand -base64 32`. Service refuses to start if unset/invalid |
+| `ENCRYPTION_MASTER_KEY_PREVIOUS` | `-encryption-master-key-previous` | | Comma-separated retired master keys, used only to decrypt `jwt_keys` rows encrypted before a rotation |
+| `JWT_KEY_RETENTION_DAYS` | `-jwt-key-retention-days` | `7` | Days an expired `jwt_keys` row is kept before the hourly maintenance routine deletes it |
 
 ---
 
@@ -159,7 +162,7 @@ Requires **Go 1.26.2** or later.
 | Table | Purpose | Notable Columns |
 |-----|--------|----------------|
 | `users` | User accounts & metadata | `account_level` (default `free`), `is_verified`, `is_admin`, `provider`, `provider_id` |
-| `jwt_keys` | RSA signing keys (rotated) | `valid_until`, `private_key`, `public_key` |
+| `jwt_keys` | RSA signing keys (rotated) | `valid_until`, `private_key` (AES-256-GCM-encrypted when `private_key_encrypted`), `public_key`, `encryption_key_id` |
 | `refresh_tokens` | Single-use refresh tokens | `revoked`, `valid_until`, `jwtid`, `created_ip`, `user_agent` |
 | `verification_tokens` | Email verification | `token`, `valid_until` |
 | `reset_password_tokens` | Password reset | `token`, `valid_until` |
