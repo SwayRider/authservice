@@ -151,6 +151,7 @@ Requires **Go 1.26.2** or later.
 | `RATE_LIMIT_BURST` | `-rate-limit-burst` | `100` | Burst allowance per source IP |
 | `RATE_LIMIT_IDLE_TTL_SECS` | `-rate-limit-idle-ttl-secs` | `300` | How long an idle per-IP rate limiter entry is kept |
 | `COOKIE_NAMESPACE` | (env only) | | Overrides the cookie namespace prefix; unset uses the default namespace |
+| `COOKIE_SAMESITE` | (env only) | `strict` | SameSite policy for the refresh-token cookie; valid values `strict`/`lax`, `none` is unsupported |
 | `ENCRYPTION_MASTER_KEY` | `-encryption-master-key` | | **Required.** Base64-encoded 256-bit key encrypting the JWT signing private key at rest; generate with `openssl rand -base64 32`. Service refuses to start if unset/invalid |
 | `ENCRYPTION_MASTER_KEY_PREVIOUS` | `-encryption-master-key-previous` | | Comma-separated retired master keys, used only to decrypt `jwt_keys` rows encrypted before a rotation |
 | `JWT_KEY_RETENTION_DAYS` | `-jwt-key-retention-days` | `7` | Days an expired `jwt_keys` row is kept before the hourly maintenance routine deletes it |

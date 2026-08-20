@@ -200,6 +200,13 @@ func main() {
 		cookies.SetNamespace(ns)
 	}
 
+	sameSite, err := cookies.ParseSameSite(os.Getenv("COOKIE_SAMESITE"))
+	if err != nil {
+		log.Warnf("invalid COOKIE_SAMESITE %q, using 'strict': %v",
+			os.Getenv("COOKIE_SAMESITE"), err)
+	}
+	cookies.SetDefaultSameSite(sameSite)
+
 	stdConfigFields :=
 		app.BackendServiceFields |
 			app.DatabaseConnectionFields |
