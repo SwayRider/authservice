@@ -8,37 +8,20 @@ require (
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.29.0
 	github.com/lib/pq v1.12.3
 	github.com/rubenv/sql-migrate v1.8.1
-	github.com/swayrider/grpcclients v0.1.7-0.20260818115456-6d4fa25ec6fa
-	github.com/swayrider/protos v0.1.4-0.20260817195903-bbe22709cfce
-	github.com/swayrider/swlib v0.1.8-0.20260819074911-e39e0c438e4c
+	github.com/swayrider/grpcclients v0.1.7
+	github.com/swayrider/protos v0.1.4
+	github.com/swayrider/swlib v0.1.9
 	github.com/wagslane/go-password-validator v0.3.0
 	google.golang.org/grpc v1.80.0
 	google.golang.org/protobuf v1.36.11
 )
 
 require (
-	github.com/armon/go-metrics v0.4.1 // indirect
-	github.com/fatih/color v1.16.0 // indirect
 	github.com/go-gorp/gorp/v3 v3.1.0 // indirect
-	github.com/hashicorp/consul/api v1.32.1 // indirect
-	github.com/hashicorp/errwrap v1.1.0 // indirect
-	github.com/hashicorp/go-cleanhttp v0.5.2 // indirect
-	github.com/hashicorp/go-hclog v1.5.0 // indirect
-	github.com/hashicorp/go-immutable-radix v1.3.1 // indirect
-	github.com/hashicorp/go-multierror v1.1.1 // indirect
-	github.com/hashicorp/go-rootcerts v1.0.2 // indirect
-	github.com/hashicorp/golang-lru v0.5.4 // indirect
-	github.com/hashicorp/serf v0.10.1 // indirect
 	github.com/joho/godotenv v1.5.1 // indirect
-	github.com/mattn/go-colorable v0.1.13 // indirect
-	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/mattn/go-sqlite3 v1.14.42 // indirect
-	github.com/mitchellh/go-homedir v1.1.0 // indirect
-	github.com/mitchellh/mapstructure v1.5.0 // indirect
 	github.com/rs/cors v1.11.1 // indirect
-	github.com/stretchr/objx v0.5.2 // indirect
 	golang.org/x/crypto v0.47.0 // indirect
-	golang.org/x/exp v0.0.0-20250305212735-054e65f0b394 // indirect
 	golang.org/x/net v0.49.0 // indirect
 	golang.org/x/sys v0.40.0 // indirect
 	golang.org/x/text v0.36.0 // indirect

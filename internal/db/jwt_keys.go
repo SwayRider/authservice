@@ -12,9 +12,12 @@ package db
 import (
 	"context"
 	"database/sql"
+	"encoding/base64"
+	"fmt"
 	"time"
 
 	"github.com/swayrider/swlib/crypto"
+	"github.com/swayrider/swlib/encryption"
 
 	log "github.com/swayrider/swlib/logger"
 )
@@ -22,6 +25,48 @@ import (
 const (
 	jwtRotateThreshold = 3 // Rotate 3 days before expiration
 )
+
+// encodeForStorage prepares a PEM private key for the private_key column.
+// If ring is set, it is encrypted under the ring's current key and
+// base64-encoded; otherwise it is stored as plaintext PEM (ring is always
+// set in production since dbCtor fails fast on a missing/invalid
+// ENCRYPTION_MASTER_KEY -- the nil branch exists only as a defensive
+// fallback / test seam).
+func encodeForStorage(privPEM string, ring *encryption.KeyRing) (value string, encrypted bool, keyID string, err error) {
+	if ring == nil {
+		return privPEM, false, "", nil
+	}
+
+	blob, id, err := ring.EncryptCurrent([]byte(privPEM))
+	if err != nil {
+		return "", false, "", fmt.Errorf("failed to encrypt private key: %w", err)
+	}
+	return base64.StdEncoding.EncodeToString(blob), true, id, nil
+}
+
+// decodeFromStorage reverses encodeForStorage given a row's stored value
+// and its private_key_encrypted flag. Plaintext rows (isEncrypted == false)
+// are returned verbatim regardless of ring, preserving pre-encryption rows
+// as readable without any backfill.
+func decodeFromStorage(value string, isEncrypted bool, keyID string, ring *encryption.KeyRing) (string, error) {
+	if !isEncrypted {
+		return value, nil
+	}
+	if ring == nil {
+		return "", fmt.Errorf("private key is encrypted but no encryption key ring is configured")
+	}
+
+	blob, err := base64.StdEncoding.DecodeString(value)
+	if err != nil {
+		return "", fmt.Errorf("failed to decode stored private key: %w", err)
+	}
+
+	privPEM, err := ring.Decrypt(blob, keyID)
+	if err != nil {
+		return "", fmt.Errorf("failed to decrypt private key (key id %q): %w", keyID, err)
+	}
+	return string(privPEM), nil
+}
 
 // EnsureKeys creates a new key pair if needed
 func (d *DB) EnsureKeys(ctx context.Context) error {
@@ -53,17 +98,27 @@ func (d *DB) GetSigningKey(ctx context.Context) (string, error) {
 		return "", err
 	}
 
-	var key string
+	var (
+		key       string
+		encrypted bool
+		keyID     sql.NullString
+	)
 	err := d.QueryRowContext(ctx, `
-		SELECT private_key FROM jwt_keys
+		SELECT private_key, private_key_encrypted, encryption_key_id FROM jwt_keys
 		WHERE valid_until > now()
 		ORDER BY id DESC
-		LIMIT 1`).Scan(&key)
+		LIMIT 1`).Scan(&key, &encrypted, &keyID)
 	if err != nil {
 		lg.Warnf("failed to retrieve key: %v", err)
 		return "", err
 	}
-	return key, nil
+
+	privPEM, err := decodeFromStorage(key, encrypted, keyID.String, d.keyRing)
+	if err != nil {
+		lg.Errorf("failed to decode signing key (key id %q): %v", keyID.String, err)
+		return "", err
+	}
+	return privPEM, nil
 }
 
 // GetVerificationKeys returns the current verification keys
@@ -135,10 +190,16 @@ func (d *DB) createNewKeyPair(ctx context.Context) error {
 		return err
 	}
 
+	storedKey, encrypted, keyID, err := encodeForStorage(privPEM, d.keyRing)
+	if err != nil {
+		lg.Warnf("failed to encode private key for storage: %v", err)
+		return err
+	}
+
 	_, err = d.ExecContext(ctx, `
-		INSERT INTO jwt_keys (private_key, public_key, valid_until)
-		VALUES ($1, $2, $3)
-	`, privPEM, pubPEM, validUntil)
+		INSERT INTO jwt_keys (private_key, public_key, valid_until, private_key_encrypted, encryption_key_id)
+		VALUES ($1, $2, $3, $4, $5)
+	`, storedKey, pubPEM, validUntil, encrypted, sql.NullString{String: keyID, Valid: keyID != ""})
 	if err != nil {
 		lg.Warnf("failed to insert keypair: %v", err)
 		return err
@@ -164,4 +225,16 @@ func (d *DB) keysNeedRotation(ctx context.Context) (bool, error) {
 		return false, err
 	}
 	return validUntil.Before(time.Now().Add(time.Hour * 24 * jwtRotateThreshold)), nil
+}
+
+// cleanupExpiredJwtKeys deletes jwt_keys rows that expired more than
+// retentionDays ago. Expired rows are never read again (GetSigningKey and
+// GetVerificationKeys both filter valid_until > now()); the retention
+// window exists only as a forensics/clock-skew safety margin.
+func (d *DB) cleanupExpiredJwtKeys(ctx context.Context, retentionDays int) error {
+	_, err := d.ExecContext(ctx, `
+		DELETE FROM jwt_keys
+		WHERE valid_until < now() - make_interval(days => $1)
+	`, retentionDays)
+	return err
 }

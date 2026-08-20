@@ -18,6 +18,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/swayrider/swlib/encryption"
 	log "github.com/swayrider/swlib/logger"
 	//"github.com/swayrider/swlib/svcreg"
 
@@ -26,23 +27,25 @@ import (
 
 // Config holds the PostgreSQL connection configuration.
 type Config struct {
-	Host     string // Database server hostname
-	Port     int    // Database server port
-	User     string // Database username
-	Password string // Database password
-	DBName   string // Database name
-	SSLMode  string // SSL mode (disable, require, verify-ca, verify-full)
+	Host              string              // Database server hostname
+	Port              int                 // Database server port
+	User              string              // Database username
+	Password          string              // Database password
+	DBName            string              // Database name
+	SSLMode           string              // SSL mode (disable, require, verify-ca, verify-full)
+	EncryptionKeyRing *encryption.KeyRing // Encrypts/decrypts jwt_keys.private_key at rest
 }
 
 // DB wraps a PostgreSQL connection with automatic reconnection support.
 // It embeds *sql.DB for direct access to standard database/sql methods.
 type DB struct {
 	*sql.DB
-	cfg            *Config
+	cfg *Config
 	//resolver       *svcreg.Resolver
 	//consulExternal bool
-	mux            *sync.Mutex
-	lg             *log.Logger
+	mux     *sync.Mutex
+	lg      *log.Logger
+	keyRing *encryption.KeyRing
 }
 
 // New returns a new DB
@@ -65,11 +68,12 @@ func New(
 	)
 
 	d := &DB{
-		cfg:            &cfg,
+		cfg: &cfg,
 		//resolver:       resolver,
 		//consulExternal: consulExternal,
-		mux:            &sync.Mutex{},
-		lg:             lg,
+		mux:     &sync.Mutex{},
+		lg:      lg,
+		keyRing: cfg.EncryptionKeyRing,
 	}
 
 	err := d.newConnection()
@@ -166,7 +170,7 @@ func (d *DB) newConnection() error {
 		if sslmode == "" {
 			sslmode = "disable"
 		}
-	/*} else if d.resolver != nil {
+		/*} else if d.resolver != nil {
 		d.lg.Debugln("using database configuration from consul")
 
 		serviceDesc, err := d.resolver.Get(svcreg.NewServiceQuery(
