@@ -54,6 +54,16 @@ func (s *AuthServer) ChangeAccountType(
 			codes.Internal, "failed to update user account type: %v", err)
 	}
 
+	// Best-effort: the calling admin's identity is only needed for the audit
+	// trail, so a claims lookup failure here must not fail an otherwise
+	// successful account-type change.
+	actor, actorErr := s.getUserFromClaims(ctx)
+	if actorErr != nil {
+		lg.Warnf("failed to resolve acting admin for audit log: %v", actorErr)
+		actor = nil
+	}
+	s.auditAdminChangeAccount(ctx, user.ID, req.AccountType, actor)
+
 	return &authv1.ChangeAccountTypeResponse{
 		Message: fmt.Sprintf(
 			"User account type updated to: %s", req.AccountType),

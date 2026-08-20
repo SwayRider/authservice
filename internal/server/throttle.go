@@ -49,20 +49,34 @@ func (s *AuthServer) isLocked(ctx context.Context, scope db.ThrottleScope, ident
 }
 
 // recordLoginAttempt records a Login success/failure for the given
-// (normalized) email against the configured login lockout thresholds.
+// (normalized) email against the configured login lockout thresholds, and
+// emits an auth.account_locked audit event on the attempt that triggers
+// lockout.
 func (s *AuthServer) recordLoginAttempt(ctx context.Context, identifier string, success bool) {
-	if err := s.DB().RecordAttemptResult(ctx, db.ScopeLogin, identifier, success,
-		s.throttle.LoginMaxAttempts, s.throttle.LoginWindow, s.throttle.LoginLockoutDuration); err != nil {
+	locked, err := s.DB().RecordAttemptResult(ctx, db.ScopeLogin, identifier, success,
+		s.throttle.LoginMaxAttempts, s.throttle.LoginWindow, s.throttle.LoginLockoutDuration)
+	if err != nil {
 		s.Logger().Warnf("recordLoginAttempt: %v", err)
+		return
+	}
+	if locked {
+		s.auditAccountLocked(ctx, db.ScopeLogin, identifier)
 	}
 }
 
 // recordClientAttempt records a GetToken success/failure for the given
-// client ID against the configured service-client lockout thresholds.
+// client ID against the configured service-client lockout thresholds, and
+// emits an auth.account_locked audit event on the attempt that triggers
+// lockout.
 func (s *AuthServer) recordClientAttempt(ctx context.Context, clientID string, success bool) {
-	if err := s.DB().RecordAttemptResult(ctx, db.ScopeGetToken, clientID, success,
-		s.throttle.ClientMaxAttempts, s.throttle.ClientWindow, s.throttle.ClientLockoutDuration); err != nil {
+	locked, err := s.DB().RecordAttemptResult(ctx, db.ScopeGetToken, clientID, success,
+		s.throttle.ClientMaxAttempts, s.throttle.ClientWindow, s.throttle.ClientLockoutDuration)
+	if err != nil {
 		s.Logger().Warnf("recordClientAttempt: %v", err)
+		return
+	}
+	if locked {
+		s.auditAccountLocked(ctx, db.ScopeGetToken, clientID)
 	}
 }
 
@@ -86,7 +100,10 @@ func (s *AuthServer) tryConsumeEmailCooldown(ctx context.Context, scope db.Throt
 // Login/GetToken) -- every call to a mail-triggering endpoint consumes
 // budget, so this always records as a "failure" to increment the counter.
 func (s *AuthServer) recordEmailSendAttempt(ctx context.Context, callerIP string) {
-	if err := s.DB().RecordAttemptResult(ctx, db.ScopeEmailSendByIP, callerIP, false,
+	// Not an account-lockout scope (see comment above) -- no audit event on
+	// the returned "locked" transition, unlike recordLoginAttempt/
+	// recordClientAttempt.
+	if _, err := s.DB().RecordAttemptResult(ctx, db.ScopeEmailSendByIP, callerIP, false,
 		s.throttle.EmailIPMaxAttempts, s.throttle.EmailIPWindow, s.throttle.EmailIPLockoutDuration); err != nil {
 		s.Logger().Warnf("recordEmailSendAttempt: %v", err)
 	}

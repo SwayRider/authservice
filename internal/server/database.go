@@ -60,6 +60,9 @@ type Database interface {
 
 	// Security throttle operations (account lockout, email cooldown)
 	IsAttemptLocked(ctx context.Context, scope db.ThrottleScope, identifier string) (bool, error)
-	RecordAttemptResult(ctx context.Context, scope db.ThrottleScope, identifier string, success bool, maxAttempts int, window, lockoutDuration time.Duration) error
+	RecordAttemptResult(ctx context.Context, scope db.ThrottleScope, identifier string, success bool, maxAttempts int, window, lockoutDuration time.Duration) (bool, error)
 	TryConsumeEmailCooldown(ctx context.Context, scope db.ThrottleScope, identifier string, cooldown time.Duration) (bool, error)
+
+	// Audit logging
+	InsertAuditEvent(ctx context.Context, ev db.AuditEvent) error
 }

@@ -148,6 +148,7 @@ type AuthServer struct {
 	verificationUrl  string         // Default verification URL when caller omits it (VERIFICATION_URL)
 	resetPasswordUrl string         // Default password-reset URL when caller omits it (RESET_PASSWORD_URL)
 	throttle         ThrottleConfig // Account lockout / email cooldown thresholds
+	audit            *AuditWriter   // Async audit_log event writer
 	l                *log.Logger    // Logger instance
 }
 
@@ -178,6 +179,7 @@ func NewAuthServer(
 	verificationUrl string,
 	resetPasswordUrl string,
 	throttle ThrottleConfig,
+	audit *AuditWriter,
 ) *AuthServer {
 	return &AuthServer{
 		dbConn:           conn,
@@ -188,6 +190,7 @@ func NewAuthServer(
 		verificationUrl:  verificationUrl,
 		resetPasswordUrl: resetPasswordUrl,
 		throttle:         throttle,
+		audit:            audit,
 		l: lgr.Derive(
 			log.WithComponent("AuthServer"),
 			log.WithFunction("NewAuthServer"),

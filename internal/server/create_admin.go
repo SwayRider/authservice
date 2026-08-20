@@ -55,6 +55,16 @@ func (s *AuthServer) CreateAdmin(
 	}
 	lg.Debugf("admin user created: %s", userid)
 
+	// Best-effort: the calling admin's identity is only needed for the audit
+	// trail, so a claims lookup failure here must not fail an otherwise
+	// successful admin creation.
+	actor, err := s.getUserFromClaims(ctx)
+	if err != nil {
+		lg.Warnf("failed to resolve acting admin for audit log: %v", err)
+		actor = nil
+	}
+	s.auditAdminCreate(ctx, userid, req.Email, actor)
+
 	return &authv1.CreateAdminResponse{
 		UserId:  userid,
 		Message: "admin user created",

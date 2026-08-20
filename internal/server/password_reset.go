@@ -146,6 +146,8 @@ func (s *AuthServer) ResetPassword(
 		lg.Debugf("failed to delete password reset token: %v", err)
 	}
 
+	s.auditPasswordReset(ctx, user.ID, user.Email)
+
 	return &authv1.ResetPasswordResponse{
 		Message: "Password reset successful",
 	}, nil

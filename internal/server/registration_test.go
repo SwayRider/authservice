@@ -152,13 +152,13 @@ func TestRegister_UsesEmailSendByIPScope(t *testing.T) {
 		registerUserFn: func(_ context.Context, _, _ string) (string, error) {
 			return "new-user-id", nil
 		},
-		recordAttemptResultFn: func(_ context.Context, scope db.ThrottleScope, identifier string, success bool, _ int, _, _ time.Duration) error {
+		recordAttemptResultFn: func(_ context.Context, scope db.ThrottleScope, identifier string, success bool, _ int, _, _ time.Duration) (bool, error) {
 			gotScope = scope
 			gotIdentifier = identifier
 			if success {
 				t.Error("expected the per-IP attempt to be recorded as a failure-shaped increment")
 			}
-			return nil
+			return false, nil
 		},
 	}
 	srv := newTestServerWithThrottle(mdb, &noopMailSender{}, testThrottleConfig())
@@ -257,7 +257,7 @@ func TestRegister_InviteOnly_NotInvited_ReturnsGenericResponseWithoutCreatingUse
 		},
 	}
 	srv := NewAuthServer(mdb, log.New(), &noopMailSender{}, "from@example.com",
-		registrationModeInviteOnly, "", "", "", ThrottleConfig{})
+		registrationModeInviteOnly, "", "", "", ThrottleConfig{}, NewAuditWriter(10, log.New()))
 	ctx := context.Background()
 
 	resp, err := srv.Register(ctx, &authv1.RegisterRequest{
@@ -294,7 +294,7 @@ func TestRegister_InviteOnly_Invited_Succeeds(t *testing.T) {
 		},
 	}
 	srv := NewAuthServer(mdb, log.New(), &noopMailSender{}, "from@example.com",
-		registrationModeInviteOnly, "", "", "", ThrottleConfig{})
+		registrationModeInviteOnly, "", "", "", ThrottleConfig{}, NewAuditWriter(10, log.New()))
 	ctx := context.Background()
 
 	resp, err := srv.Register(ctx, &authv1.RegisterRequest{
@@ -382,10 +382,10 @@ func TestVerifyEmail_UsesEmailSendByIPScope(t *testing.T) {
 	var gotScope db.ThrottleScope
 	var gotIdentifier string
 	mdb := &mockDB{
-		recordAttemptResultFn: func(_ context.Context, scope db.ThrottleScope, identifier string, _ bool, _ int, _, _ time.Duration) error {
+		recordAttemptResultFn: func(_ context.Context, scope db.ThrottleScope, identifier string, _ bool, _ int, _, _ time.Duration) (bool, error) {
 			gotScope = scope
 			gotIdentifier = identifier
-			return nil
+			return false, nil
 		},
 	}
 	srv := newTestServerWithThrottle(mdb, &noopMailSender{}, testThrottleConfig())

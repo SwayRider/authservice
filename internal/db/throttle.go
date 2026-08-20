@@ -62,6 +62,13 @@ func (d *DB) IsAttemptLocked(ctx context.Context, scope ThrottleScope, identifie
 // maxAttempts <= 0 disables lockout for this call entirely (nothing is
 // recorded); this is what keeps callers that don't configure a ThrottleConfig
 // unaffected.
+//
+// The returned bool is true only on the call whose failure causes the
+// transition into lockout (count first reaching maxAttempts) -- not on every
+// subsequent blocked attempt, since those are turned away earlier by
+// IsAttemptLocked and never reach here. Callers use this to emit a single
+// auth.account_locked audit event per lockout episode rather than one per
+// blocked attempt.
 func (d *DB) RecordAttemptResult(
 	ctx context.Context,
 	scope ThrottleScope,
@@ -70,16 +77,16 @@ func (d *DB) RecordAttemptResult(
 	maxAttempts int,
 	window time.Duration,
 	lockoutDuration time.Duration,
-) error {
+) (bool, error) {
 	lg := d.lg.Derive(log.WithFunction("RecordAttemptResult"))
 
 	if maxAttempts <= 0 {
-		return nil
+		return false, nil
 	}
 
 	if err := d.checkConnection(); err != nil {
 		lg.Warnf("RecordAttemptResult: %v", err)
-		return err
+		return false, err
 	}
 
 	if success {
@@ -91,7 +98,7 @@ func (d *DB) RecordAttemptResult(
 		if err != nil {
 			lg.Warnf("RecordAttemptResult: %v", err)
 		}
-		return err
+		return false, err
 	}
 
 	var count int
@@ -112,7 +119,7 @@ func (d *DB) RecordAttemptResult(
 	`, scope, identifier, window.Seconds()).Scan(&count)
 	if err != nil {
 		lg.Warnf("RecordAttemptResult: %v", err)
-		return err
+		return false, err
 	}
 
 	if count >= maxAttempts {
@@ -123,11 +130,16 @@ func (d *DB) RecordAttemptResult(
 		`, scope, identifier, lockoutDuration.Seconds())
 		if err != nil {
 			lg.Warnf("RecordAttemptResult: %v", err)
-			return err
+			return false, err
 		}
+		// Only the call that hits exactly maxAttempts is the transition into
+		// lockout; later blocked attempts never reach RecordAttemptResult at
+		// all (IsAttemptLocked turns them away first), so no extra guard is
+		// needed here.
+		return count == maxAttempts, nil
 	}
 
-	return nil
+	return false, nil
 }
 
 // TryConsumeEmailCooldown attempts to consume the cooldown budget for

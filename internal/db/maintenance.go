@@ -11,8 +11,10 @@ import (
 	log "github.com/swayrider/swlib/logger"
 )
 
-// DoDatabaseMaintenance does database maintenance tasks
-func (d *DB) DoDatabaseMaintenance(ctx context.Context) error {
+// DoDatabaseMaintenance does database maintenance tasks. auditRetentionDays
+// controls how far back audit_log rows are kept before cleanupAuditLog
+// deletes them.
+func (d *DB) DoDatabaseMaintenance(ctx context.Context, auditRetentionDays int) error {
 	lg := d.lg.Derive(log.WithFunction("DoDatabaseMaintenance"))
 
 	if err := d.checkConnection(); err != nil {
@@ -52,6 +54,12 @@ func (d *DB) DoDatabaseMaintenance(ctx context.Context) error {
 	err = d.cleanupSecurityThrottle(ctx)
 	if err != nil {
 		lg.Warnf("failed to cleanup security throttle: %v", err)
+		return err
+	}
+
+	err = d.cleanupAuditLog(ctx, auditRetentionDays)
+	if err != nil {
+		lg.Warnf("failed to cleanup audit log: %v", err)
 		return err
 	}
 
