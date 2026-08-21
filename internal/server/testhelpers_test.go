@@ -82,13 +82,35 @@ func testServiceClient(scopes []string) *model.ServiceClientInternal {
 }
 
 func newTestServer(d Database, m MailSender) *AuthServer {
-	return NewAuthServer(d, log.New(), m, "from@example.com", "open", "", "", "", ThrottleConfig{}, NewAuditWriter(10, log.New()))
+	return NewAuthServer(d, log.New(), m, "from@example.com", "open", "", "", "", ThrottleConfig{}, NewAuditWriter(10, log.New()), nil)
 }
 
 // newTestServerWithThrottle is like newTestServer but with throttling enabled,
 // for tests that specifically exercise lockout/cooldown behavior.
 func newTestServerWithThrottle(d Database, m MailSender, throttle ThrottleConfig) *AuthServer {
-	return NewAuthServer(d, log.New(), m, "from@example.com", "open", "", "", "", throttle, NewAuditWriter(10, log.New()))
+	return NewAuthServer(d, log.New(), m, "from@example.com", "open", "", "", "", throttle, NewAuditWriter(10, log.New()), nil)
+}
+
+// newTestServerWithBreached is like newTestServer but with a breach checker
+// installed, for tests that exercise the HIBP integration.
+func newTestServerWithBreached(d Database, m MailSender, b BreachedChecker) *AuthServer {
+	return NewAuthServer(d, log.New(), m, "from@example.com", "open", "", "", "", ThrottleConfig{}, NewAuditWriter(10, log.New()), b)
+}
+
+
+// =============================================================================
+// mockBreachedChecker — implements BreachedChecker with configurable fields
+// =============================================================================
+
+type mockBreachedChecker struct {
+	isBreachedFn func(ctx context.Context, password string) (bool, int, error)
+}
+
+func (m *mockBreachedChecker) IsBreached(ctx context.Context, password string) (bool, int, error) {
+	if m.isBreachedFn != nil {
+		return m.isBreachedFn(ctx, password)
+	}
+	return false, 0, nil
 }
 
 // newTestHealthServer creates a HealthServer that probes p, caching results
@@ -201,6 +223,8 @@ type mockDB struct {
 	isAttemptLockedFn             func(ctx context.Context, scope db.ThrottleScope, identifier string) (bool, error)
 	recordAttemptResultFn         func(ctx context.Context, scope db.ThrottleScope, identifier string, success bool, maxAttempts int, window, lockoutDuration time.Duration) (bool, error)
 	tryConsumeEmailCooldownFn     func(ctx context.Context, scope db.ThrottleScope, identifier string, cooldown time.Duration) (bool, error)
+	addToPasswordHistoryFn        func(ctx context.Context, userID, passwordHash string) error
+	checkPasswordReuseFn          func(ctx context.Context, userID, newPassword string) (bool, error)
 	insertAuditEventFn            func(ctx context.Context, ev db.AuditEvent) error
 }
 
@@ -419,6 +443,18 @@ func (m *mockDB) TryConsumeEmailCooldown(ctx context.Context, scope db.ThrottleS
 		return m.tryConsumeEmailCooldownFn(ctx, scope, identifier, cooldown)
 	}
 	return true, nil
+}
+func (m *mockDB) AddToPasswordHistory(ctx context.Context, userID, passwordHash string) error {
+	if m.addToPasswordHistoryFn != nil {
+		return m.addToPasswordHistoryFn(ctx, userID, passwordHash)
+	}
+	return nil
+}
+func (m *mockDB) CheckPasswordReuse(ctx context.Context, userID, newPassword string) (bool, error) {
+	if m.checkPasswordReuseFn != nil {
+		return m.checkPasswordReuseFn(ctx, userID, newPassword)
+	}
+	return false, nil
 }
 func (m *mockDB) InsertAuditEvent(ctx context.Context, ev db.AuditEvent) error {
 	if m.insertAuditEventFn != nil {

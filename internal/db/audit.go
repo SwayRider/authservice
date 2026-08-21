@@ -21,19 +21,21 @@ import (
 type AuditEventType string
 
 const (
-	AuditLoginSuccess       AuditEventType = "auth.login.success"
-	AuditLoginFailure       AuditEventType = "auth.login.failure"
-	AuditLogout             AuditEventType = "auth.logout"
-	AuditRefreshSuccess     AuditEventType = "auth.refresh.success"
-	AuditRefreshFailure     AuditEventType = "auth.refresh.failure"
-	AuditServiceClientAuth  AuditEventType = "auth.service_client.auth"
-	AuditRegister           AuditEventType = "auth.register"
-	AuditVerifyEmail        AuditEventType = "auth.verify_email"
-	AuditPasswordChange     AuditEventType = "auth.password_change"
-	AuditPasswordReset      AuditEventType = "auth.password_reset"
-	AuditAccountLocked      AuditEventType = "auth.account_locked"
-	AuditAdminCreate        AuditEventType = "auth.admin.create"
-	AuditAdminChangeAccount AuditEventType = "auth.admin.change_account"
+	AuditLoginSuccess             AuditEventType = "auth.login.success"
+	AuditLoginFailure             AuditEventType = "auth.login.failure"
+	AuditLogout                   AuditEventType = "auth.logout"
+	AuditRefreshSuccess           AuditEventType = "auth.refresh.success"
+	AuditRefreshFailure           AuditEventType = "auth.refresh.failure"
+	AuditServiceClientAuth        AuditEventType = "auth.service_client.auth"
+	AuditRegister                 AuditEventType = "auth.register"
+	AuditVerifyEmail              AuditEventType = "auth.verify_email"
+	AuditPasswordChange           AuditEventType = "auth.password_change"
+	AuditPasswordReset            AuditEventType = "auth.password_reset"
+	AuditPasswordBreachedRejected AuditEventType = "auth.password_breached_rejected"
+	AuditPasswordReuseRejected    AuditEventType = "auth.password_reuse_rejected"
+	AuditAccountLocked            AuditEventType = "auth.account_locked"
+	AuditAdminCreate              AuditEventType = "auth.admin.create"
+	AuditAdminChangeAccount       AuditEventType = "auth.admin.change_account"
 )
 
 // AuditEvent is a single row to be written to audit_log. UserID identifies

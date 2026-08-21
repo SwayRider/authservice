@@ -149,6 +149,7 @@ type AuthServer struct {
 	resetPasswordUrl string         // Default password-reset URL when caller omits it (RESET_PASSWORD_URL)
 	throttle         ThrottleConfig // Account lockout / email cooldown thresholds
 	audit            *AuditWriter   // Async audit_log event writer
+	breached         BreachedChecker // Password breach detection (nil = feature off)
 	l                *log.Logger    // Logger instance
 }
 
@@ -180,6 +181,7 @@ func NewAuthServer(
 	resetPasswordUrl string,
 	throttle ThrottleConfig,
 	audit *AuditWriter,
+	breached BreachedChecker,
 ) *AuthServer {
 	return &AuthServer{
 		dbConn:           conn,
@@ -191,6 +193,7 @@ func NewAuthServer(
 		resetPasswordUrl: resetPasswordUrl,
 		throttle:         throttle,
 		audit:            audit,
+		breached:         breached,
 		l: lgr.Derive(
 			log.WithComponent("AuthServer"),
 			log.WithFunction("NewAuthServer"),

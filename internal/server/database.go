@@ -63,6 +63,10 @@ type Database interface {
 	RecordAttemptResult(ctx context.Context, scope db.ThrottleScope, identifier string, success bool, maxAttempts int, window, lockoutDuration time.Duration) (bool, error)
 	TryConsumeEmailCooldown(ctx context.Context, scope db.ThrottleScope, identifier string, cooldown time.Duration) (bool, error)
 
+	// Password history operations (recent-password reuse prevention)
+	AddToPasswordHistory(ctx context.Context, userID, passwordHash string) error
+	CheckPasswordReuse(ctx context.Context, userID, newPassword string) (bool, error)
+
 	// Audit logging
 	InsertAuditEvent(ctx context.Context, ev db.AuditEvent) error
 }

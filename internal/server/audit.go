@@ -50,6 +50,13 @@ func (w *AuditWriter) Chan() <-chan db.AuditEvent {
 	return w.ch
 }
 
+// Emit queues ev for asynchronous persistence. Exported for the web layer,
+// which shares the same AuditWriter instance; the unexported emit used by the
+// per-event helpers below is the same code path.
+func (w *AuditWriter) Emit(ev db.AuditEvent) {
+	w.emit(ev)
+}
+
 // emit queues ev for asynchronous persistence. It never blocks: if the
 // buffer is full, the event is dropped and a warning logged rather than
 // stalling the request that triggered it.
@@ -175,6 +182,33 @@ func (s *AuthServer) auditPasswordReset(ctx context.Context, userID, email strin
 	s.audit.emit(db.AuditEvent{
 		EventType: db.AuditPasswordReset,
 		UserID:    strPtr(userID),
+		Email:     email,
+		IPAddress: ip,
+		UserAgent: ua,
+	})
+}
+
+// auditBreachedPasswordRejected records a rejection of a password that
+// appeared in a known data breach. userID is nil when the rejection happened
+// before account creation (registration); email is always set.
+func (s *AuthServer) auditBreachedPasswordRejected(ctx context.Context, userID *string, email string) {
+	ip, ua := auditIPUA(ctx)
+	s.audit.emit(db.AuditEvent{
+		EventType: db.AuditPasswordBreachedRejected,
+		UserID:    userID,
+		Email:     email,
+		IPAddress: ip,
+		UserAgent: ua,
+	})
+}
+
+// auditReusedPasswordRejected records a rejection of a new password that
+// matches a recent password of the same account.
+func (s *AuthServer) auditReusedPasswordRejected(ctx context.Context, userID *string, email string) {
+	ip, ua := auditIPUA(ctx)
+	s.audit.emit(db.AuditEvent{
+		EventType: db.AuditPasswordReuseRejected,
+		UserID:    userID,
 		Email:     email,
 		IPAddress: ip,
 		UserAgent: ua,

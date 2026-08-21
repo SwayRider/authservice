@@ -27,13 +27,14 @@ import (
 
 // Config holds the PostgreSQL connection configuration.
 type Config struct {
-	Host              string              // Database server hostname
-	Port              int                 // Database server port
-	User              string              // Database username
-	Password          string              // Database password
-	DBName            string              // Database name
-	SSLMode           string              // SSL mode (disable, require, verify-ca, verify-full)
-	EncryptionKeyRing *encryption.KeyRing // Encrypts/decrypts jwt_keys.private_key at rest
+	Host                string              // Database server hostname
+	Port                int                 // Database server port
+	User                string              // Database username
+	Password            string              // Database password
+	DBName              string              // Database name
+	SSLMode             string              // SSL mode (disable, require, verify-ca, verify-full)
+	EncryptionKeyRing   *encryption.KeyRing // Encrypts/decrypts jwt_keys.private_key at rest
+	PasswordHistorySize int                 // How many recent password hashes per user are kept (PASSWORD_HISTORY_SIZE)
 }
 
 // DB wraps a PostgreSQL connection with automatic reconnection support.
@@ -43,9 +44,10 @@ type DB struct {
 	cfg *Config
 	//resolver       *svcreg.Resolver
 	//consulExternal bool
-	mux     *sync.Mutex
-	lg      *log.Logger
-	keyRing *encryption.KeyRing
+	mux                 *sync.Mutex
+	lg                  *log.Logger
+	keyRing             *encryption.KeyRing
+	passwordHistorySize int // How many recent password hashes per user are kept
 }
 
 // New returns a new DB
@@ -71,9 +73,10 @@ func New(
 		cfg: &cfg,
 		//resolver:       resolver,
 		//consulExternal: consulExternal,
-		mux:     &sync.Mutex{},
-		lg:      lg,
-		keyRing: cfg.EncryptionKeyRing,
+		mux:                 &sync.Mutex{},
+		lg:                  lg,
+		keyRing:             cfg.EncryptionKeyRing,
+		passwordHistorySize: cfg.PasswordHistorySize,
 	}
 
 	err := d.newConnection()

@@ -67,6 +67,14 @@ func (s *AuthServer) Register(
 			codes.InvalidArgument, "password is too weak: %v", err)
 	}
 
+	if err := s.checkNotBreached(ctx, req.Password); err != nil {
+		lg.Debugf("registration rejected: %v", err)
+		// No user exists yet at this point; the attempted email is all we
+		// can attribute the rejection to.
+		s.auditBreachedPasswordRejected(ctx, nil, req.Email)
+		return nil, err
+	}
+
 	hashedPassword, err := crypto.CalculatePasswordHash(req.Password)
 	if err != nil {
 		lg.Debugf("user password hashing error: %v", err)
@@ -124,6 +132,13 @@ func (s *AuthServer) Register(
 	}
 	lg.Debugf("user registered with ID: %s", userid)
 	s.auditRegister(ctx, userid, req.Email)
+
+	// Seed the password history with the initial password so a later change
+	// cannot rotate back to it. Failures are log-only: history is a
+	// hardening feature, not a core-path dependency.
+	if err := s.DB().AddToPasswordHistory(ctx, userid, hashedPassword); err != nil {
+		lg.Warnf("failed to seed password history for %s: %v", userid, err)
+	}
 
 	if s.registrationMode == registrationModeInviteOnly {
 		if err := s.DB().ConsumeInvite(ctx, req.Email); err != nil {

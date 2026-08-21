@@ -155,6 +155,37 @@ Requires **Go 1.26.2** or later.
 | `ENCRYPTION_MASTER_KEY` | `-encryption-master-key` | | **Required.** Base64-encoded 256-bit key encrypting the JWT signing private key at rest; generate with `openssl rand -base64 32`. Service refuses to start if unset/invalid |
 | `ENCRYPTION_MASTER_KEY_PREVIOUS` | `-encryption-master-key-previous` | | Comma-separated retired master keys, used only to decrypt `jwt_keys` rows encrypted before a rotation |
 | `JWT_KEY_RETENTION_DAYS` | `-jwt-key-retention-days` | `7` | Days an expired `jwt_keys` row is kept before the hourly maintenance routine deletes it |
+| `HIBP_ENABLED` | `-hibp-enabled` | `true` | Reject passwords that appeared in a known data breach (Pwned Passwords API) |
+| `HIBP_TIMEOUT_MS` | `-hibp-timeout-ms` | `3000` | Timeout for Pwned Passwords API requests |
+| `HIBP_MIN_COUNT` | `-hibp-min-count` | `1` | Minimum breach occurrences before a password is rejected |
+| `PASSWORD_HISTORY_SIZE` | `-password-history-size` | `5` | Recent password hashes kept per user; change/reset reject reusing one |
+
+---
+
+## Password Breach Detection (HIBP)
+
+`Register`, `ChangePassword` and `ResetPassword` (both the gRPC/REST surface and the web forms) reject passwords that have appeared in a known data breach. Checks run against the free [Pwned Passwords API](https://haveibeenpwned.com/Passwords) via the `swlib/hibp` client, which uses the **k-anonymity range protocol**: only the first 5 characters of the uppercase SHA-1 hash of the password are sent to the API, so the password itself (and its full hash) never leave the server. The `Add-Padding: true` header is sent so response size does not reveal whether a suffix matched.
+
+Behavior:
+
+- Rejection returns `InvalidArgument` with the stable message prefix `password has appeared in a known data breach`; the API gateway maps this to HTTP 400 with `reason: breached_password`, which the mobile client surfaces as a dedicated message.
+- The check **fails open**: any HIBP error (timeout, rate limit, non-200) is logged and the password is accepted, so an HIBP outage never blocks users.
+- The check runs after the cheap local validations (entropy, old password, reset token) and before hashing, and only when the password is not already rejected as too weak.
+- `HIBP_ENABLED=false` disables the feature entirely (no network calls).
+
+---
+
+## Password History (Reuse Prevention)
+
+`ChangePassword` and `ResetPassword` reject a new password that matches any of the user's **last `PASSWORD_HISTORY_SIZE` passwords** (default 5). Hashes are stored in the `password_history` table in the same Argon2id format as `users.password_hash`.
+
+Behavior:
+
+- Every newly-set password is recorded: registration seeds the history (including the bootstrapped admin's initial password), and change/reset append the new hash after it is stored.
+- Because the current password is always the newest history entry, `ResetPassword` also catches a reset to the *current* password (it has no separate "must differ from old" check).
+- Rejection returns `InvalidArgument` with the stable message prefix `password has been used before`; the API gateway maps this to HTTP 400 with `reason: password_reused`, which the mobile client surfaces as a dedicated message.
+- History writes and the reuse check **fail open**: a DB error is logged and the password is accepted, so a history outage never blocks users.
+- The hourly DB maintenance routine trims any per-user history beyond the configured size (safety net for rows written before the size was lowered).
 
 ---
 

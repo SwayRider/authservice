@@ -45,6 +45,7 @@ import (
 	"github.com/swayrider/grpcclients/mailclient"
 	authv1 "github.com/swayrider/protos/auth/v1"
 	healthv1 "github.com/swayrider/protos/health/v1"
+	"github.com/swayrider/swlib/hibp"
 	"github.com/swayrider/swlib/http/cookies"
 	log "github.com/swayrider/swlib/logger"
 	"google.golang.org/grpc"
@@ -95,6 +96,12 @@ Environment variables:
 
 	REGISTRATION_MODE
 	REGISTRATION_URL
+
+	HIBP_ENABLED				(default: true)
+	HIBP_TIMEOUT_MS				(default: 3000)
+	HIBP_MIN_COUNT				(default: 1)
+
+	PASSWORD_HISTORY_SIZE			(default: 5)
 
 	MAILSERVICE_HOST
 	MAILSERVICE_PORT
@@ -180,6 +187,22 @@ const (
 	FldJwtKeyRetentionDays = "jwt-key-retention-days"
 	EnvJwtKeyRetentionDays = "JWT_KEY_RETENTION_DAYS"
 	DefJwtKeyRetentionDays = 7
+
+	FldHibpEnabled   = "hibp-enabled"
+	FldHibpTimeoutMs = "hibp-timeout-ms"
+	FldHibpMinCount  = "hibp-min-count"
+
+	EnvHibpEnabled   = "HIBP_ENABLED"
+	EnvHibpTimeoutMs = "HIBP_TIMEOUT_MS"
+	EnvHibpMinCount  = "HIBP_MIN_COUNT"
+
+	DefHibpEnabled   = true
+	DefHibpTimeoutMs = 3000
+	DefHibpMinCount  = 1
+
+	FldPasswordHistorySize = "password-history-size"
+	EnvPasswordHistorySize = "PASSWORD_HISTORY_SIZE"
+	DefPasswordHistorySize = 5
 
 	FldEncryptionMasterKey         = "encryption-master-key"
 	FldEncryptionMasterKeyPrevious = "encryption-master-key-previous"
@@ -285,6 +308,22 @@ func main() {
 				FldJwtKeyRetentionDays, EnvJwtKeyRetentionDays,
 				"Days an expired jwt_keys row is kept (forensics/clock-skew margin) before the hourly maintenance routine deletes it",
 				DefJwtKeyRetentionDays),
+			app.NewBoolConfigField(
+				FldHibpEnabled, EnvHibpEnabled,
+				"Enable password breach checks against the Have I Been Pwned Pwned Passwords API (fail-open: an HIBP outage never blocks users)",
+				DefHibpEnabled),
+			app.NewIntConfigField(
+				FldHibpTimeoutMs, EnvHibpTimeoutMs,
+				"Timeout in milliseconds for Pwned Passwords API requests",
+				DefHibpTimeoutMs),
+			app.NewIntConfigField(
+				FldHibpMinCount, EnvHibpMinCount,
+				"Minimum number of times a password must appear in breach data before it is rejected",
+				DefHibpMinCount),
+			app.NewIntConfigField(
+				FldPasswordHistorySize, EnvPasswordHistorySize,
+				"How many recent password hashes per user are kept so password change and reset reject reusing one of them",
+				DefPasswordHistorySize),
 			app.NewStringConfigField(
 				FldEncryptionMasterKey, EnvEncryptionMasterKey,
 				"Base64-encoded 256-bit master key used to encrypt the JWT signing private key at rest (required; generate with `openssl rand -base64 32`)",
@@ -351,12 +390,13 @@ func dbCtor(a app.App) app.DB {
 	lg := a.Logger().Derive(log.WithFunction("dbCtor"))
 
 	cfg := db.Config{
-		Password: app.GetConfigField[string](a.Config(), app.KeyDBPassword),
-		Host:     app.GetConfigField[string](a.Config(), app.KeyDBHost),
-		Port:     app.GetConfigField[int](a.Config(), app.KeyDBPort),
-		User:     app.GetConfigField[string](a.Config(), app.KeyDBUser),
-		DBName:   app.GetConfigField[string](a.Config(), app.KeyDBName),
-		SSLMode:  app.GetConfigField[string](a.Config(), app.KeyDBSSLMode),
+		Password:            app.GetConfigField[string](a.Config(), app.KeyDBPassword),
+		Host:                app.GetConfigField[string](a.Config(), app.KeyDBHost),
+		Port:                app.GetConfigField[int](a.Config(), app.KeyDBPort),
+		User:                app.GetConfigField[string](a.Config(), app.KeyDBUser),
+		DBName:              app.GetConfigField[string](a.Config(), app.KeyDBName),
+		SSLMode:             app.GetConfigField[string](a.Config(), app.KeyDBSSLMode),
+		PasswordHistorySize: app.GetConfigField[int](a.Config(), FldPasswordHistorySize),
 	}
 
 	rawKey := app.GetConfigField[string](a.Config(), FldEncryptionMasterKey)
@@ -432,10 +472,16 @@ func bootstrapAdmin(cfg *app.Config, dbconn *db.DB, l *log.Logger) {
 		if err != nil {
 			l.Fatalf("failed to calculate password hash: %v", err)
 		}
-		if _, err := dbconn.CreateAdminUser(
+		adminID, err := dbconn.CreateAdminUser(
 			ctx, adminEmail, hashedPassword,
-		); err != nil {
+		)
+		if err != nil {
 			l.Fatalf("failed to create admin user: %v", err)
+		}
+		// Seed the admin's initial password into history so it cannot be
+		// rotated back to. Failures are log-only.
+		if err := dbconn.AddToPasswordHistory(ctx, adminID, hashedPassword); err != nil {
+			l.Warnf("failed to seed admin password history: %v", err)
 		}
 	}
 }
@@ -524,6 +570,25 @@ func sharedAuditWriter(a app.App) *server.AuditWriter {
 	return auditWriterInst
 }
 
+// hibpOnce/hibpInst back sharedHIBPClient: one *hibp.Client instance shared
+// between the gRPC AuthServer and the web register/reset handlers. The lazy
+// sync.Once mirrors sharedAuditWriter -- config is only parseable once
+// application.Run() starts, and neither callback is guaranteed to run first.
+var (
+	hibpOnce sync.Once
+	hibpInst *hibp.Client
+)
+
+func sharedHIBPClient(a app.App) *hibp.Client {
+	hibpOnce.Do(func() {
+		enabled := app.GetConfigField[bool](a.Config(), FldHibpEnabled)
+		timeout := time.Duration(app.GetConfigField[int](a.Config(), FldHibpTimeoutMs)) * time.Millisecond
+		minCount := app.GetConfigField[int](a.Config(), FldHibpMinCount)
+		hibpInst = hibp.New(enabled, timeout, minCount, a.Logger())
+	})
+	return hibpInst
+}
+
 // auditFlusher is a background routine that drains the shared AuditWriter's
 // buffer, writing each event to the database. Unlike keyChecker/dbMaintenance
 // it has no ticker -- it drains continuously as events arrive rather than on
@@ -602,6 +667,7 @@ func grpcAuthRegistrar(r grpc.ServiceRegistrar, a app.App) {
 		resetPasswordUrl,
 		throttle,
 		sharedAuditWriter(a),
+		sharedHIBPClient(a),
 	)
 	authv1.RegisterAuthServiceServer(r, srv)
 }
@@ -669,6 +735,8 @@ func startWebServer(a app.App) error {
 		MailerAddress:    mailerAddress,
 		RegistrationMode: registrationMode,
 		VerifyUserUrl:    verifyUserUrl,
+		Breached:         sharedHIBPClient(a),
+		Audit:            sharedAuditWriter(a),
 	}
 
 	ws := web.New(

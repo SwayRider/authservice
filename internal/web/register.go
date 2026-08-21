@@ -21,18 +21,35 @@ import (
 
 	passwordvalidator "github.com/wagslane/go-password-validator"
 	"github.com/swayrider/authservice/internal/db"
+	"github.com/swayrider/authservice/internal/model"
 	"github.com/swayrider/authservice/internal/svctoken"
 	"github.com/swayrider/grpcclients/mailclient"
 	"github.com/swayrider/swlib/crypto"
 	log "github.com/swayrider/swlib/logger"
 )
 
+// BreachedChecker reports whether a password has appeared in a known data
+// breach. It is satisfied structurally by *hibp.Client; kept local to this
+// package so the web layer doesn't depend on the server package.
+type BreachedChecker interface {
+	IsBreached(ctx context.Context, password string) (bool, int, error)
+}
+
+// AuditEmitter records security-relevant audit events. Satisfied by
+// *server.AuditWriter; kept as an interface so the web layer doesn't depend
+// on the server package. Nil disables auditing.
+type AuditEmitter interface {
+	Emit(ev db.AuditEvent)
+}
+
 // RegisterConfig holds configuration for the user registration web handler.
 type RegisterConfig struct {
 	MailClient       *mailclient.Client
 	MailerAddress    string
-	RegistrationMode string // "open" or "invite_only"
-	VerifyUserUrl    string // full base URL for /verify-user, used in verification emails
+	RegistrationMode string          // "open" or "invite_only"
+	VerifyUserUrl    string          // full base URL for /verify-user, used in verification emails
+	Breached         BreachedChecker // password breach detection (nil = off)
+	Audit            AuditEmitter    // audit event writer (nil = off)
 }
 
 // register returns an HTTP handler for the web registration flow.
@@ -103,6 +120,25 @@ func register(
 
 		ctx := r.Context()
 
+		if cfg.Breached != nil {
+			breached, _, err := cfg.Breached.IsBreached(ctx, password)
+			if err != nil {
+				lg.Debugf("breach check failed, allowing password (fail open): %v", err)
+			} else if breached {
+				if cfg.Audit != nil {
+					ip, ua := auditClientInfo(r)
+					cfg.Audit.Emit(db.AuditEvent{
+						EventType: db.AuditPasswordBreachedRejected,
+						Email:     email,
+						IPAddress: ip,
+						UserAgent: ua,
+					})
+				}
+				renderForm("register_password_breached")
+				return
+			}
+		}
+
 		if cfg.RegistrationMode == "invite_only" {
 			invited, err := dbConn.IsEmailInvited(ctx, email)
 			if err != nil {
@@ -137,6 +173,12 @@ func register(
 			return
 		}
 
+		// Seed the password history with the initial password so a later
+		// change cannot rotate back to it. Failures are log-only.
+		if err := dbConn.AddToPasswordHistory(ctx, userId, hashedPassword); err != nil {
+			lg.Warnf("failed to seed password history for %s: %v", userId, err)
+		}
+
 		if cfg.RegistrationMode == "invite_only" {
 			if err := dbConn.ConsumeInvite(ctx, email); err != nil {
 				lg.Errorf("failed to consume invite for %s: %v", email, err)
@@ -150,6 +192,14 @@ func register(
 			w.WriteHeader(http.StatusInternalServerError)
 		}
 	}
+}
+
+// auditClientInfo extracts the caller IP and user-agent for audit events. The
+// web server's middleware chain does not populate source info into the request
+// context (unlike the gRPC gateway), so the client IP comes from the
+// X-Forwarded-For header set by the gateway/reverse proxy.
+func auditClientInfo(r *http.Request) (ip, ua string) {
+	return model.FirstIP(r.Header.Get("X-Forwarded-For")), r.UserAgent()
 }
 
 // webSendVerificationEmail creates a verification token and sends the verification
