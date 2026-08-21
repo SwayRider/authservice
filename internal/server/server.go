@@ -115,6 +115,18 @@ func init() {
 		"user:read",
 	})
 
+	// MFA - Unverified (any authenticated user, verified or not): manage
+	// their own TOTP enrollment
+	security.UnverifiedEndpoint("/auth.v1.AuthService/SetupMFA")
+	security.UnverifiedEndpoint("/auth.v1.AuthService/EnableMFA")
+	security.UnverifiedEndpoint("/auth.v1.AuthService/DisableMFA")
+	security.UnverifiedEndpoint("/auth.v1.AuthService/GetMFAStatus")
+	security.UnverifiedEndpoint("/auth.v1.AuthService/GenerateBackupCodes")
+
+	// VerifyMFA - Public: complete a pending-login MFA challenge (no tokens
+	// exist yet at that point, so it cannot require authentication)
+	security.PublicEndpoint("/auth.v1.AuthService/VerifyMFA")
+
 	// HealthService Endpoints
 	// -----------------------
 
@@ -148,6 +160,7 @@ type AuthServer struct {
 	verificationUrl  string         // Default verification URL when caller omits it (VERIFICATION_URL)
 	resetPasswordUrl string         // Default password-reset URL when caller omits it (RESET_PASSWORD_URL)
 	throttle         ThrottleConfig // Account lockout / email cooldown thresholds
+	mfa              MFAConfig     // TOTP second-factor configuration (zero value = feature off)
 	audit            *AuditWriter   // Async audit_log event writer
 	breached         BreachedChecker // Password breach detection (nil = feature off)
 	l                *log.Logger    // Logger instance
@@ -180,6 +193,7 @@ func NewAuthServer(
 	verificationUrl string,
 	resetPasswordUrl string,
 	throttle ThrottleConfig,
+	mfa MFAConfig,
 	audit *AuditWriter,
 	breached BreachedChecker,
 ) *AuthServer {
@@ -192,6 +206,7 @@ func NewAuthServer(
 		verificationUrl:  verificationUrl,
 		resetPasswordUrl: resetPasswordUrl,
 		throttle:         throttle,
+		mfa:              mfa,
 		audit:            audit,
 		breached:         breached,
 		l: lgr.Derive(

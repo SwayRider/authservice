@@ -740,6 +740,19 @@ func grpcAuthRegistrar(r grpc.ServiceRegistrar, a app.App) {
 		EmailIPLockoutDuration: time.Duration(app.GetConfigField[int](a.Config(), FldEmailIPLockoutDurationSecs)) * time.Second,
 	}
 
+	mfaCfg := server.MFAConfig{
+		Enabled:              app.GetConfigField[bool](a.Config(), FldMfaEnabled),
+		CodeLength:           app.GetConfigField[int](a.Config(), FldMfaCodeLength),
+		TimeStep:             time.Duration(app.GetConfigField[int](a.Config(), FldMfaTimeStepSecs)) * time.Second,
+		GracePeriod:          app.GetConfigField[int](a.Config(), FldMfaGracePeriod),
+		BackupCodeCount:      app.GetConfigField[int](a.Config(), FldMfaBackupCodes),
+		ChallengeTTL:         time.Duration(app.GetConfigField[int](a.Config(), FldMfaChallengeTtlSecs)) * time.Second,
+		ChallengeMaxAttempts: app.GetConfigField[int](a.Config(), FldMfaChallengeMaxAttempts),
+		LockoutMaxAttempts:   app.GetConfigField[int](a.Config(), FldMfaLockoutThreshold),
+		LockoutWindow:        time.Duration(app.GetConfigField[int](a.Config(), FldMfaLockoutWindowSecs)) * time.Second,
+		LockoutDuration:      time.Duration(app.GetConfigField[int](a.Config(), FldMfaLockoutDurationSecs)) * time.Second,
+	}
+
 	srv := server.NewAuthServer(
 		a.Database().(*db.DB),
 		a.Logger(),
@@ -750,6 +763,7 @@ func grpcAuthRegistrar(r grpc.ServiceRegistrar, a app.App) {
 		verificationUrl,
 		resetPasswordUrl,
 		throttle,
+		mfaCfg,
 		sharedAuditWriter(a),
 		sharedHIBPClient(a),
 	)

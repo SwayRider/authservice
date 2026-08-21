@@ -253,3 +253,177 @@ func TestLogout_EmitsAuditLogout(t *testing.T) {
 		t.Errorf("EventType = %q, want %q", ev.EventType, db.AuditLogout)
 	}
 }
+
+// =============================================================================
+// MFA audit events
+// =============================================================================
+
+func TestSetupMFA_EmitsAuditMFASetupStarted(t *testing.T) {
+	mdb := &mockDB{
+		getUserByIDFn: func(_ context.Context, _ string) (*model.UserInternal, error) {
+			return testUser(), nil
+		},
+		getMFAStatusFn: func(_ context.Context, _ string) (bool, error) {
+			return false, nil
+		},
+		createMFASecretFn: func(_ context.Context, _, _ string) error {
+			return nil
+		},
+	}
+	srv := newTestServerWithMFA(mdb, &noopMailSender{}, testMFAConfig())
+	ctx := claimsContext("test-user-id")
+
+	if _, err := srv.SetupMFA(ctx, &authv1.SetupMFARequest{}); err != nil {
+		t.Fatalf("SetupMFA failed: %v", err)
+	}
+
+	ev := waitForAuditEvent(t, srv)
+	if ev.EventType != db.AuditMFASetupStarted {
+		t.Errorf("EventType = %q, want %q", ev.EventType, db.AuditMFASetupStarted)
+	}
+	if ev.UserID == nil || *ev.UserID != "test-user-id" {
+		t.Errorf("UserID = %v, want test-user-id", ev.UserID)
+	}
+}
+
+func TestEnableMFA_EmitsAuditMFAEnabledAndBackupCodes(t *testing.T) {
+	mdb := &mockDB{
+		getUserByIDFn: func(_ context.Context, _ string) (*model.UserInternal, error) {
+			return testUser(), nil
+		},
+		getMFAStatusFn: func(_ context.Context, _ string) (bool, error) {
+			return false, nil
+		},
+		getMFASecretFn: func(_ context.Context, _ string) (*db.MFAUser, error) {
+			return &db.MFAUser{UserID: "test-user-id", Enabled: false, Secret: testMFASecret}, nil
+		},
+		enableMFAFn: func(_ context.Context, _ string) error {
+			return nil
+		},
+		storeBackupCodeHashesFn: func(_ context.Context, _ string, _ []string) error {
+			return nil
+		},
+	}
+	srv := newTestServerWithMFA(mdb, &noopMailSender{}, testMFAConfig())
+	ctx := claimsContext("test-user-id")
+
+	if _, err := srv.EnableMFA(ctx, &authv1.EnableMFARequest{Code: testMFACode(t, srv)}); err != nil {
+		t.Fatalf("EnableMFA failed: %v", err)
+	}
+
+	got := map[db.AuditEventType]bool{
+		waitForAuditEvent(t, srv).EventType: true,
+		waitForAuditEvent(t, srv).EventType: true,
+	}
+	if !got[db.AuditMFAEnabled] {
+		t.Error("expected an auth.mfa_enabled event")
+	}
+	if !got[db.AuditMFABackupCodesGenerated] {
+		t.Error("expected an auth.mfa_backup_codes_generated event")
+	}
+}
+
+func TestDisableMFA_EmitsAuditMFADisabled(t *testing.T) {
+	mdb := &mockDB{
+		getUserByIDFn: func(_ context.Context, _ string) (*model.UserInternal, error) {
+			return testUser(), nil
+		},
+		disableMFAFn: func(_ context.Context, _ string) error {
+			return nil
+		},
+	}
+	srv := newTestServerWithMFA(mdb, &noopMailSender{}, testMFAConfig())
+	ctx := claimsContext("test-user-id")
+
+	if _, err := srv.DisableMFA(ctx, &authv1.DisableMFARequest{Password: testPassword}); err != nil {
+		t.Fatalf("DisableMFA failed: %v", err)
+	}
+
+	ev := waitForAuditEvent(t, srv)
+	if ev.EventType != db.AuditMFADisabled {
+		t.Errorf("EventType = %q, want %q", ev.EventType, db.AuditMFADisabled)
+	}
+}
+
+func TestVerifyMFA_EmitsAuditMFAVerified(t *testing.T) {
+	mdb := &mockDB{
+		getMFAChallengeFn: func(_ context.Context, tokenHash string) (*model.MFAChallenge, error) {
+			ch := validChallenge()
+			ch.TokenHash = tokenHash
+			return ch, nil
+		},
+		getMFASecretFn: func(_ context.Context, _ string) (*db.MFAUser, error) {
+			return &db.MFAUser{UserID: "test-user-id", Enabled: true, Secret: testMFASecret}, nil
+		},
+		getUserByIDFn: func(_ context.Context, _ string) (*model.UserInternal, error) {
+			return testUser(), nil
+		},
+	}
+	srv := newTestServerWithMFA(mdb, &noopMailSender{}, testMFAConfig())
+	ctx := context.Background()
+
+	if _, err := srv.VerifyMFA(ctx, &authv1.VerifyMFARequest{
+		MfaToken: "raw-challenge-token",
+		Code:     testMFACode(t, srv),
+	}); err != nil {
+		t.Fatalf("VerifyMFA failed: %v", err)
+	}
+
+	ev := waitForAuditEvent(t, srv)
+	if ev.EventType != db.AuditMFAVerified {
+		t.Errorf("EventType = %q, want %q", ev.EventType, db.AuditMFAVerified)
+	}
+}
+
+func TestVerifyMFA_EmitsAuditMFAVerifyFailed(t *testing.T) {
+	mdb := &mockDB{
+		getMFAChallengeFn: func(_ context.Context, tokenHash string) (*model.MFAChallenge, error) {
+			ch := validChallenge()
+			ch.TokenHash = tokenHash
+			return ch, nil
+		},
+		getMFASecretFn: func(_ context.Context, _ string) (*db.MFAUser, error) {
+			return &db.MFAUser{UserID: "test-user-id", Enabled: true, Secret: testMFASecret}, nil
+		},
+	}
+	srv := newTestServerWithMFA(mdb, &noopMailSender{}, testMFAConfig())
+	ctx := context.Background()
+
+	_, _ = srv.VerifyMFA(ctx, &authv1.VerifyMFARequest{
+		MfaToken: "raw-challenge-token",
+		Code:     "000000",
+	})
+
+	ev := waitForAuditEvent(t, srv)
+	if ev.EventType != db.AuditMFAVerifyFailed {
+		t.Errorf("EventType = %q, want %q", ev.EventType, db.AuditMFAVerifyFailed)
+	}
+	if ev.Metadata["reason"] != "invalid_code" {
+		t.Errorf("Metadata[reason] = %v, want invalid_code", ev.Metadata["reason"])
+	}
+}
+
+func TestGenerateBackupCodes_EmitsAuditMFABackupCodesGenerated(t *testing.T) {
+	mdb := &mockDB{
+		getUserByIDFn: func(_ context.Context, _ string) (*model.UserInternal, error) {
+			return testUser(), nil
+		},
+		getMFAStatusFn: func(_ context.Context, _ string) (bool, error) {
+			return true, nil
+		},
+		storeBackupCodeHashesFn: func(_ context.Context, _ string, _ []string) error {
+			return nil
+		},
+	}
+	srv := newTestServerWithMFA(mdb, &noopMailSender{}, testMFAConfig())
+	ctx := claimsContext("test-user-id")
+
+	if _, err := srv.GenerateBackupCodes(ctx, &authv1.GenerateBackupCodesRequest{Password: testPassword}); err != nil {
+		t.Fatalf("GenerateBackupCodes failed: %v", err)
+	}
+
+	ev := waitForAuditEvent(t, srv)
+	if ev.EventType != db.AuditMFABackupCodesGenerated {
+		t.Errorf("EventType = %q, want %q", ev.EventType, db.AuditMFABackupCodesGenerated)
+	}
+}

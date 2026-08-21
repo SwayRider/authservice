@@ -51,8 +51,11 @@ func GetRememberMe(ctx context.Context) (rememberMe bool) {
 
 // CookieForwarder is a grpc-gateway response modifier that handles refresh token cookies.
 // It automatically sets or clears the refresh_token HTTP-only cookie based on the response type:
-//   - LoginResponse/RefreshResponse: Sets the cookie with the new refresh token
+//   - LoginResponse/RefreshResponse/VerifyMFAResponse: Sets the cookie with the new refresh token
 //   - LogoutResponse: Clears the cookie
+//
+// A response with an empty refresh token (e.g. a pending MFA login response
+// that carries only a challenge token) never sets a cookie.
 //
 // The cookie lifetime is extended if the remember-me header is set to "true".
 func CookieForwarder(ctx context.Context, w http.ResponseWriter, resp proto.Message) error {
@@ -66,8 +69,17 @@ func CookieForwarder(ctx context.Context, w http.ResponseWriter, resp proto.Mess
 	case *authv1.RefreshResponse:
 		setCookie = true
 		token = r.RefreshToken
+	case *authv1.VerifyMFAResponse:
+		setCookie = true
+		token = r.RefreshToken
 	case *authv1.LogoutResponse:
 		unsetCookie = true
+	}
+
+	// A response with no refresh token (e.g. a pending MFA login that only
+	// carries a challenge token) must never set an empty cookie.
+	if setCookie && token == "" {
+		setCookie = false
 	}
 
 	if setCookie {
@@ -189,6 +201,28 @@ func (s *AuthServer) Login(
 
 	s.recordLoginAttempt(ctx, identifier, true)
 	s.auditLoginSuccess(ctx, u.ID, u.Email)
+
+	// MFA gate: when the account has MFA enabled, do not issue tokens yet.
+	// Issue a short-lived single-use challenge token instead; the caller
+	// exchanges it (plus a TOTP/backup code) via VerifyMFA. This lookup runs
+	// only after a correct password, and the response shape is uniform for
+	// MFA/non-MFA accounts (the client branches on mfa_required), so it is
+	// not an account-enumeration signal. When the global switch is off, the
+	// MFA step is simply bypassed.
+	if s.mfa.Enabled {
+		enabled, err := s.DB().GetMFAStatus(ctx, u.ID)
+		if err != nil {
+			return nil, status.Error(codes.Internal, "internal error")
+		}
+		if enabled {
+			rawToken, err := s.createMFAChallenge(ctx, u.ID)
+			if err != nil {
+				lg.Errorf("failed to create MFA challenge: %v", err)
+				return nil, status.Error(codes.Internal, "internal error")
+			}
+			return &authv1.LoginResponse{MfaRequired: true, MfaToken: rawToken}, nil
+		}
+	}
 
 	origIp, _ := security.GetOrigIp(ctx)
 	userAgent, _ := security.GetUserAgent(ctx)

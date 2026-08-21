@@ -36,6 +36,12 @@ const (
 	AuditAccountLocked            AuditEventType = "auth.account_locked"
 	AuditAdminCreate              AuditEventType = "auth.admin.create"
 	AuditAdminChangeAccount       AuditEventType = "auth.admin.change_account"
+	AuditMFASetupStarted          AuditEventType = "auth.mfa_setup_started"
+	AuditMFAEnabled               AuditEventType = "auth.mfa_enabled"
+	AuditMFADisabled              AuditEventType = "auth.mfa_disabled"
+	AuditMFAVerified              AuditEventType = "auth.mfa_verified"
+	AuditMFAVerifyFailed          AuditEventType = "auth.mfa_verify_failed"
+	AuditMFABackupCodesGenerated  AuditEventType = "auth.mfa_backup_codes_generated"
 )
 
 // AuditEvent is a single row to be written to audit_log. UserID identifies

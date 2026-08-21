@@ -257,7 +257,7 @@ func TestRegister_InviteOnly_NotInvited_ReturnsGenericResponseWithoutCreatingUse
 		},
 	}
 	srv := NewAuthServer(mdb, log.New(), &noopMailSender{}, "from@example.com",
-		registrationModeInviteOnly, "", "", "", ThrottleConfig{}, NewAuditWriter(10, log.New()), nil)
+		registrationModeInviteOnly, "", "", "", ThrottleConfig{}, MFAConfig{}, NewAuditWriter(10, log.New()), nil)
 	ctx := context.Background()
 
 	resp, err := srv.Register(ctx, &authv1.RegisterRequest{
@@ -294,7 +294,7 @@ func TestRegister_InviteOnly_Invited_Succeeds(t *testing.T) {
 		},
 	}
 	srv := NewAuthServer(mdb, log.New(), &noopMailSender{}, "from@example.com",
-		registrationModeInviteOnly, "", "", "", ThrottleConfig{}, NewAuditWriter(10, log.New()), nil)
+		registrationModeInviteOnly, "", "", "", ThrottleConfig{}, MFAConfig{}, NewAuditWriter(10, log.New()), nil)
 	ctx := context.Background()
 
 	resp, err := srv.Register(ctx, &authv1.RegisterRequest{

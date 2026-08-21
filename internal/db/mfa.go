@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/swayrider/authservice/internal/model"
+	"github.com/swayrider/swlib/crypto"
 	"github.com/swayrider/swlib/encryption"
 	log "github.com/swayrider/swlib/logger"
 )
@@ -238,11 +239,20 @@ func (d *DB) StoreBackupCodeHashes(ctx context.Context, userID string, hashes []
 	return nil
 }
 
-// ConsumeBackupCode atomically claims an unused backup code for the user.
-// It reports whether a code was claimed (the update matched exactly one
-// unused row); a code that is missing, already used, or belongs to another
-// user reports false.
-func (d *DB) ConsumeBackupCode(ctx context.Context, userID, codeHash string) (bool, error) {
+// ConsumeBackupCode atomically claims one of the user's unused backup
+// codes for the presented plaintext code.
+//
+// The code is verified against the stored Argon2id hashes -- a direct hash
+// lookup is impossible because every hash is salted (two hashes of the same
+// code never compare equal), so verification must run the KDF against each
+// unused row. The matching row is then claimed with a conditional UPDATE
+// (WHERE used = false), so a code presented concurrently by two requests is
+// used exactly once. This mirrors ConsumeRefreshToken, where the plaintext
+// secret crosses into this layer and all crypto happens here.
+//
+// Reports whether a code was claimed; a wrong, already-used, or foreign
+// code reports false.
+func (d *DB) ConsumeBackupCode(ctx context.Context, userID, code string) (bool, error) {
 	lg := d.lg.Derive(log.WithFunction("ConsumeBackupCode"))
 
 	if err := d.checkConnection(); err != nil {
@@ -250,21 +260,57 @@ func (d *DB) ConsumeBackupCode(ctx context.Context, userID, codeHash string) (bo
 		return false, err
 	}
 
-	var id int64
-	err := d.QueryRowContext(ctx, `
-		UPDATE mfa_backup_codes
-		SET used = true, used_at = now()
-		WHERE user_id = $1 AND code_hash = $2 AND used = false
-		RETURNING id
-	`, userID, codeHash).Scan(&id)
+	rows, err := d.QueryContext(ctx, `
+		SELECT code_hash FROM mfa_backup_codes
+		WHERE user_id = $1 AND used = false
+	`, userID)
 	if err != nil {
-		if err == sql.ErrNoRows {
-			return false, nil
-		}
 		lg.Warnf("ConsumeBackupCode: %v", err)
 		return false, err
 	}
-	return true, nil
+	defer func() { _ = rows.Close() }()
+
+	for rows.Next() {
+		var codeHash string
+		if err := rows.Scan(&codeHash); err != nil {
+			lg.Warnf("ConsumeBackupCode: %v", err)
+			return false, err
+		}
+
+		ok, err := crypto.VerifyPassword(codeHash, code)
+		if err != nil {
+			// Malformed/undecodable hash -- skip and try the rest.
+			lg.Debugf("ConsumeBackupCode: unverifiable hash: %v", err)
+			continue
+		}
+		if !ok {
+			continue
+		}
+
+		// Atomic claim: only an unused row can be claimed. If a concurrent
+		// request already took it, try the remaining hashes (a code can only
+		// match one, so this terminates quickly).
+		var id int64
+		err = d.QueryRowContext(ctx, `
+			UPDATE mfa_backup_codes
+			SET used = true, used_at = now()
+			WHERE user_id = $1 AND code_hash = $2 AND used = false
+			RETURNING id
+		`, userID, codeHash).Scan(&id)
+		if err == sql.ErrNoRows {
+			continue
+		}
+		if err != nil {
+			lg.Warnf("ConsumeBackupCode: %v", err)
+			return false, err
+		}
+		return true, nil
+	}
+	if err := rows.Err(); err != nil {
+		lg.Warnf("ConsumeBackupCode: %v", err)
+		return false, err
+	}
+	return false, nil
 }
 
 // CreateMFAChallenge deletes any prior challenge for the user, then inserts
