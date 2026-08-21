@@ -103,6 +103,17 @@ Environment variables:
 
 	PASSWORD_HISTORY_SIZE			(default: 5)
 
+	MFA_ENABLED				(default: true)
+	MFA_CODE_LENGTH				(default: 6)
+	MFA_TIME_STEP				(default: 30)
+	MFA_GRACE_PERIOD			(default: 1)
+	MFA_BACKUP_CODES			(default: 10)
+	MFA_CHALLENGE_TTL_SECS			(default: 300)
+	MFA_CHALLENGE_MAX_ATTEMPTS		(default: 5)
+	MFA_LOCKOUT_THRESHOLD			(default: 5)
+	MFA_LOCKOUT_WINDOW_SECS			(default: 900)
+	MFA_LOCKOUT_DURATION_SECS		(default: 900)
+
 	MAILSERVICE_HOST
 	MAILSERVICE_PORT
 */
@@ -203,6 +214,39 @@ const (
 	FldPasswordHistorySize = "password-history-size"
 	EnvPasswordHistorySize = "PASSWORD_HISTORY_SIZE"
 	DefPasswordHistorySize = 5
+
+	FldMfaEnabled              = "mfa-enabled"
+	FldMfaCodeLength           = "mfa-code-length"
+	FldMfaTimeStepSecs         = "mfa-time-step-secs"
+	FldMfaGracePeriod          = "mfa-grace-period"
+	FldMfaBackupCodes          = "mfa-backup-codes"
+	FldMfaChallengeTtlSecs     = "mfa-challenge-ttl-secs"
+	FldMfaChallengeMaxAttempts = "mfa-challenge-max-attempts"
+	FldMfaLockoutThreshold     = "mfa-lockout-threshold"
+	FldMfaLockoutWindowSecs    = "mfa-lockout-window-secs"
+	FldMfaLockoutDurationSecs  = "mfa-lockout-duration-secs"
+
+	EnvMfaEnabled              = "MFA_ENABLED"
+	EnvMfaCodeLength           = "MFA_CODE_LENGTH"
+	EnvMfaTimeStepSecs         = "MFA_TIME_STEP"
+	EnvMfaGracePeriod          = "MFA_GRACE_PERIOD"
+	EnvMfaBackupCodes          = "MFA_BACKUP_CODES"
+	EnvMfaChallengeTtlSecs     = "MFA_CHALLENGE_TTL_SECS"
+	EnvMfaChallengeMaxAttempts = "MFA_CHALLENGE_MAX_ATTEMPTS"
+	EnvMfaLockoutThreshold     = "MFA_LOCKOUT_THRESHOLD"
+	EnvMfaLockoutWindowSecs    = "MFA_LOCKOUT_WINDOW_SECS"
+	EnvMfaLockoutDurationSecs  = "MFA_LOCKOUT_DURATION_SECS"
+
+	DefMfaEnabled              = true
+	DefMfaCodeLength           = 6
+	DefMfaTimeStepSecs         = 30
+	DefMfaGracePeriod          = 1
+	DefMfaBackupCodes          = 10
+	DefMfaChallengeTtlSecs     = 300
+	DefMfaChallengeMaxAttempts = 5
+	DefMfaLockoutThreshold     = 5
+	DefMfaLockoutWindowSecs    = 900
+	DefMfaLockoutDurationSecs  = 900
 
 	FldEncryptionMasterKey         = "encryption-master-key"
 	FldEncryptionMasterKeyPrevious = "encryption-master-key-previous"
@@ -324,6 +368,46 @@ func main() {
 				FldPasswordHistorySize, EnvPasswordHistorySize,
 				"How many recent password hashes per user are kept so password change and reset reject reusing one of them",
 				DefPasswordHistorySize),
+			app.NewBoolConfigField(
+				FldMfaEnabled, EnvMfaEnabled,
+				"Global switch for TOTP two-factor authentication; false bypasses the MFA step in login and fails closed on MFA management endpoints",
+				DefMfaEnabled),
+			app.NewIntConfigField(
+				FldMfaCodeLength, EnvMfaCodeLength,
+				"Number of digits in TOTP codes (1-8; clamped)",
+				DefMfaCodeLength),
+			app.NewIntConfigField(
+				FldMfaTimeStepSecs, EnvMfaTimeStepSecs,
+				"TOTP time-step window in seconds",
+				DefMfaTimeStepSecs),
+			app.NewIntConfigField(
+				FldMfaGracePeriod, EnvMfaGracePeriod,
+				"Accept a TOTP code from this many windows before/after the current one (clock skew tolerance)",
+				DefMfaGracePeriod),
+			app.NewIntConfigField(
+				FldMfaBackupCodes, EnvMfaBackupCodes,
+				"Number of single-use backup codes issued on MFA setup",
+				DefMfaBackupCodes),
+			app.NewIntConfigField(
+				FldMfaChallengeTtlSecs, EnvMfaChallengeTtlSecs,
+				"Lifetime in seconds of a pending-login MFA challenge token",
+				DefMfaChallengeTtlSecs),
+			app.NewIntConfigField(
+				FldMfaChallengeMaxAttempts, EnvMfaChallengeMaxAttempts,
+				"TOTP/backup-code guesses allowed per MFA challenge before it is invalidated",
+				DefMfaChallengeMaxAttempts),
+			app.NewIntConfigField(
+				FldMfaLockoutThreshold, EnvMfaLockoutThreshold,
+				"Failed MFA verifications before the user's MFA throttle scope locks",
+				DefMfaLockoutThreshold),
+			app.NewIntConfigField(
+				FldMfaLockoutWindowSecs, EnvMfaLockoutWindowSecs,
+				"Sliding window in seconds over which failed MFA verifications are counted",
+				DefMfaLockoutWindowSecs),
+			app.NewIntConfigField(
+				FldMfaLockoutDurationSecs, EnvMfaLockoutDurationSecs,
+				"How long in seconds the MFA throttle scope stays locked once the threshold is reached",
+				DefMfaLockoutDurationSecs),
 			app.NewStringConfigField(
 				FldEncryptionMasterKey, EnvEncryptionMasterKey,
 				"Base64-encoded 256-bit master key used to encrypt the JWT signing private key at rest (required; generate with `openssl rand -base64 32`)",

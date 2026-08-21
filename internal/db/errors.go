@@ -18,4 +18,6 @@ var (
 	ErrNoPasswordResetTokenFound = errors.New("no password reset token found")
 	ErrServiceClientNotFound     = errors.New("service client not found")
 	ErrInviteNotFound            = errors.New("invite not found")
+	ErrNoMFARecord               = errors.New("no MFA record found")
+	ErrNoMFAChallengeFound       = errors.New("no MFA challenge found")
 )

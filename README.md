@@ -159,6 +159,16 @@ Requires **Go 1.26.2** or later.
 | `HIBP_TIMEOUT_MS` | `-hibp-timeout-ms` | `3000` | Timeout for Pwned Passwords API requests |
 | `HIBP_MIN_COUNT` | `-hibp-min-count` | `1` | Minimum breach occurrences before a password is rejected |
 | `PASSWORD_HISTORY_SIZE` | `-password-history-size` | `5` | Recent password hashes kept per user; change/reset reject reusing one |
+| `MFA_ENABLED` | `-mfa-enabled` | `true` | Global TOTP MFA switch; when `false` login skips the MFA step and MFA management endpoints fail closed |
+| `MFA_CODE_LENGTH` | `-mfa-code-length` | `6` | TOTP digits (clamped to 1–8) |
+| `MFA_TIME_STEP` | `-mfa-time-step-secs` | `30` | Seconds per TOTP time-step window |
+| `MFA_GRACE_PERIOD` | `-mfa-grace-period` | `1` | Accept a code from this many windows before/after the current one (clock skew tolerance) |
+| `MFA_BACKUP_CODES` | `-mfa-backup-codes` | `10` | Number of single-use backup codes issued on MFA setup |
+| `MFA_CHALLENGE_TTL_SECS` | `-mfa-challenge-ttl-secs` | `300` | Lifetime of a pending-login MFA challenge token |
+| `MFA_CHALLENGE_MAX_ATTEMPTS` | `-mfa-challenge-max-attempts` | `5` | TOTP/backup-code guesses allowed per challenge before it is invalidated |
+| `MFA_LOCKOUT_THRESHOLD` | `-mfa-lockout-threshold` | `5` | Failed MFA verifications before the user's MFA throttle scope locks |
+| `MFA_LOCKOUT_WINDOW_SECS` | `-mfa-lockout-window-secs` | `900` | Sliding window over which failed MFA verifications are counted |
+| `MFA_LOCKOUT_DURATION_SECS` | `-mfa-lockout-duration-secs` | `900` | How long the MFA throttle scope stays locked |
 
 ---
 
@@ -200,6 +210,9 @@ Behavior:
 | `reset_password_tokens` | Password reset | `token`, `valid_until` |
 | `service_clients` | Service credentials | `client_id`, `client_secret`, `scopes` (TEXT[]) |
 | `registration_invites` | Pre-approved emails for invite-only mode | `email` (unique), `created_at` |
+| `user_mfa` | TOTP MFA enrollment (one row per user) | `enabled`, `secret` (AES-256-GCM blob), `secret_key_id` |
+| `mfa_backup_codes` | Single-use backup codes (Argon2id-hashed) | `code_hash`, `used`, `used_at` |
+| `mfa_challenges` | Pending-login MFA challenge tokens (SHA-256-hashed) | `token_hash`, `attempts`, `valid_until` |
 
 Service clients authenticate via the `GetToken` endpoint and are granted fine-grained access using the `scopes` array (e.g. `user:read`).
 

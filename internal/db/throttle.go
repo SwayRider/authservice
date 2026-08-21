@@ -26,6 +26,7 @@ const (
 	ScopeEmailVerification  ThrottleScope = "email_verification"
 	ScopeEmailPasswordReset ThrottleScope = "email_password_reset"
 	ScopeEmailSendByIP      ThrottleScope = "email_send_by_ip"
+	ScopeMFA                ThrottleScope = "mfa"
 )
 
 // IsAttemptLocked reports whether identifier is currently locked out within scope.
