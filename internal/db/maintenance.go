@@ -75,5 +75,17 @@ func (d *DB) DoDatabaseMaintenance(ctx context.Context, auditRetentionDays, jwtK
 		return err
 	}
 
+	err = d.cleanupMFAChallenges(ctx)
+	if err != nil {
+		lg.Warnf("failed to cleanup mfa challenges: %v", err)
+		return err
+	}
+
+	err = d.cleanupMFAResetTokens(ctx)
+	if err != nil {
+		lg.Warnf("failed to cleanup mfa reset tokens: %v", err)
+		return err
+	}
+
 	return nil
 }

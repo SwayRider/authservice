@@ -215,6 +215,98 @@ func (s *AuthServer) auditReusedPasswordRejected(ctx context.Context, userID *st
 	})
 }
 
+// auditMFASetupStarted records a user beginning TOTP enrollment (a new
+// secret was generated and stored, not yet enabled).
+func (s *AuthServer) auditMFASetupStarted(ctx context.Context, userID, email string) {
+	ip, ua := auditIPUA(ctx)
+	s.audit.emit(db.AuditEvent{
+		EventType: db.AuditMFASetupStarted,
+		UserID:    strPtr(userID),
+		Email:     email,
+		IPAddress: ip,
+		UserAgent: ua,
+	})
+}
+
+// auditMFAEnabled records a user completing enrollment (the new secret was
+// verified with a valid code and MFA is now active for the account).
+func (s *AuthServer) auditMFAEnabled(ctx context.Context, userID, email string) {
+	ip, ua := auditIPUA(ctx)
+	s.audit.emit(db.AuditEvent{
+		EventType: db.AuditMFAEnabled,
+		UserID:    strPtr(userID),
+		Email:     email,
+		IPAddress: ip,
+		UserAgent: ua,
+	})
+}
+
+// auditMFADisabled records a user turning MFA off for their account.
+func (s *AuthServer) auditMFADisabled(ctx context.Context, userID, email string) {
+	ip, ua := auditIPUA(ctx)
+	s.audit.emit(db.AuditEvent{
+		EventType: db.AuditMFADisabled,
+		UserID:    strPtr(userID),
+		Email:     email,
+		IPAddress: ip,
+		UserAgent: ua,
+	})
+}
+
+// auditMFAVerified records a completed second-factor verification (tokens
+// were issued for a pending login).
+func (s *AuthServer) auditMFAVerified(ctx context.Context, userID string) {
+	ip, ua := auditIPUA(ctx)
+	s.audit.emit(db.AuditEvent{
+		EventType: db.AuditMFAVerified,
+		UserID:    strPtr(userID),
+		IPAddress: ip,
+		UserAgent: ua,
+	})
+}
+
+// auditMFAVerifyFailed records a failed second-factor verification attempt.
+// reason is one of "invalid_code", "challenge_expired", "locked". userID is
+// nil when the challenge itself could not be resolved (absent/expired token),
+// so there is no subject to attribute the attempt to.
+func (s *AuthServer) auditMFAVerifyFailed(ctx context.Context, userID *string, reason string) {
+	ip, ua := auditIPUA(ctx)
+	s.audit.emit(db.AuditEvent{
+		EventType: db.AuditMFAVerifyFailed,
+		UserID:    userID,
+		IPAddress: ip,
+		UserAgent: ua,
+		Metadata:  map[string]any{"reason": reason},
+	})
+}
+
+// auditMFABackupCodesGenerated records the issuance (or re-issuance) of a
+// fresh backup-code set, which invalidates the previous set.
+func (s *AuthServer) auditMFABackupCodesGenerated(ctx context.Context, userID string) {
+	ip, ua := auditIPUA(ctx)
+	s.audit.emit(db.AuditEvent{
+		EventType: db.AuditMFABackupCodesGenerated,
+		UserID:    strPtr(userID),
+		IPAddress: ip,
+		UserAgent: ua,
+	})
+}
+
+// auditMFAResetRequested records a successful (credentials-verified) request
+// to email an MFA reset link. This does not mean the reset was completed --
+// see the AuditMFAReset event, emitted by the web confirmation handler
+// (internal/web/reset_mfa.go) once the emailed link is actually used.
+func (s *AuthServer) auditMFAResetRequested(ctx context.Context, userID, email string) {
+	ip, ua := auditIPUA(ctx)
+	s.audit.emit(db.AuditEvent{
+		EventType: db.AuditMFAResetRequested,
+		UserID:    strPtr(userID),
+		Email:     email,
+		IPAddress: ip,
+		UserAgent: ua,
+	})
+}
+
 // auditAccountLocked records the transition of identifier into lockout
 // within scope. For db.ScopeLogin, identifier is a normalized email; for
 // db.ScopeGetToken it's a service client ID, which isn't an "email" so it

@@ -5,6 +5,9 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
 	"github.com/swayrider/authservice/internal/db"
 	"github.com/swayrider/authservice/internal/model"
 	authv1 "github.com/swayrider/protos/auth/v1"
@@ -245,7 +248,7 @@ func TestRegister_DuplicateEmail_ReturnsGenericResponseAndNotifiesOwner(t *testi
 	mail.waitForSend(t)
 }
 
-func TestRegister_InviteOnly_NotInvited_ReturnsGenericResponseWithoutCreatingUser(t *testing.T) {
+func TestRegister_InviteOnly_NotInvited_ReturnsPermissionDeniedWithoutCreatingUser(t *testing.T) {
 	registerCalled := false
 	mdb := &mockDB{
 		isEmailInvitedFn: func(_ context.Context, _ string) (bool, error) {
@@ -257,22 +260,15 @@ func TestRegister_InviteOnly_NotInvited_ReturnsGenericResponseWithoutCreatingUse
 		},
 	}
 	srv := NewAuthServer(mdb, log.New(), &noopMailSender{}, "from@example.com",
-		registrationModeInviteOnly, "", "", "", ThrottleConfig{}, NewAuditWriter(10, log.New()), nil)
+		registrationModeInviteOnly, "", "", "", "", ThrottleConfig{}, MFAConfig{}, NewAuditWriter(10, log.New()), nil)
 	ctx := context.Background()
 
-	resp, err := srv.Register(ctx, &authv1.RegisterRequest{
+	_, err := srv.Register(ctx, &authv1.RegisterRequest{
 		Email:    "uninvited@example.com",
 		Password: testPassword,
 	})
-	if err != nil {
-		t.Fatalf("Register failed: %v", err)
-	}
-	if resp.UserId != "" {
-		t.Errorf("UserId = %q, want empty", resp.UserId)
-	}
-	const wantMsg = "If this email is eligible for registration, check your inbox to continue."
-	if resp.Message != wantMsg {
-		t.Errorf("Message = %q, want %q (must match the duplicate-email case)", resp.Message, wantMsg)
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("code = %v, want %v (err: %v)", status.Code(err), codes.PermissionDenied, err)
 	}
 	if registerCalled {
 		t.Error("RegisterUser must not be called for a non-invited email")
@@ -294,7 +290,7 @@ func TestRegister_InviteOnly_Invited_Succeeds(t *testing.T) {
 		},
 	}
 	srv := NewAuthServer(mdb, log.New(), &noopMailSender{}, "from@example.com",
-		registrationModeInviteOnly, "", "", "", ThrottleConfig{}, NewAuditWriter(10, log.New()), nil)
+		registrationModeInviteOnly, "", "", "", "", ThrottleConfig{}, MFAConfig{}, NewAuditWriter(10, log.New()), nil)
 	ctx := context.Background()
 
 	resp, err := srv.Register(ctx, &authv1.RegisterRequest{

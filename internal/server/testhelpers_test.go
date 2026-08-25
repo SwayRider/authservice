@@ -82,19 +82,25 @@ func testServiceClient(scopes []string) *model.ServiceClientInternal {
 }
 
 func newTestServer(d Database, m MailSender) *AuthServer {
-	return NewAuthServer(d, log.New(), m, "from@example.com", "open", "", "", "", ThrottleConfig{}, NewAuditWriter(10, log.New()), nil)
+	return NewAuthServer(d, log.New(), m, "from@example.com", "open", "", "", "", "", ThrottleConfig{}, MFAConfig{}, NewAuditWriter(10, log.New()), nil)
 }
 
 // newTestServerWithThrottle is like newTestServer but with throttling enabled,
 // for tests that specifically exercise lockout/cooldown behavior.
 func newTestServerWithThrottle(d Database, m MailSender, throttle ThrottleConfig) *AuthServer {
-	return NewAuthServer(d, log.New(), m, "from@example.com", "open", "", "", "", throttle, NewAuditWriter(10, log.New()), nil)
+	return NewAuthServer(d, log.New(), m, "from@example.com", "open", "", "", "", "", throttle, MFAConfig{}, NewAuditWriter(10, log.New()), nil)
+}
+
+// newTestServerWithMFA is like newTestServer but with the given MFA
+// configuration, for tests that exercise the TOTP enrollment/login flow.
+func newTestServerWithMFA(d Database, m MailSender, mfa MFAConfig) *AuthServer {
+	return NewAuthServer(d, log.New(), m, "from@example.com", "open", "", "", "", "", ThrottleConfig{}, mfa, NewAuditWriter(10, log.New()), nil)
 }
 
 // newTestServerWithBreached is like newTestServer but with a breach checker
 // installed, for tests that exercise the HIBP integration.
 func newTestServerWithBreached(d Database, m MailSender, b BreachedChecker) *AuthServer {
-	return NewAuthServer(d, log.New(), m, "from@example.com", "open", "", "", "", ThrottleConfig{}, NewAuditWriter(10, log.New()), b)
+	return NewAuthServer(d, log.New(), m, "from@example.com", "open", "", "", "", "", ThrottleConfig{}, MFAConfig{}, NewAuditWriter(10, log.New()), b)
 }
 
 
@@ -225,6 +231,18 @@ type mockDB struct {
 	tryConsumeEmailCooldownFn     func(ctx context.Context, scope db.ThrottleScope, identifier string, cooldown time.Duration) (bool, error)
 	addToPasswordHistoryFn        func(ctx context.Context, userID, passwordHash string) error
 	checkPasswordReuseFn          func(ctx context.Context, userID, newPassword string) (bool, error)
+	getMFASecretFn                func(ctx context.Context, userID string) (*db.MFAUser, error)
+	getMFAStatusFn                func(ctx context.Context, userID string) (bool, error)
+	createMFASecretFn             func(ctx context.Context, userID, secret string) error
+	enableMFAFn                   func(ctx context.Context, userID string) error
+	disableMFAFn                  func(ctx context.Context, userID string) error
+	storeBackupCodeHashesFn       func(ctx context.Context, userID string, hashes []string) error
+	consumeBackupCodeFn           func(ctx context.Context, userID, code string) (bool, error)
+	createMFAChallengeFn          func(ctx context.Context, userID, tokenHash string, validUntil time.Time) error
+	getMFAChallengeFn             func(ctx context.Context, tokenHash string) (*model.MFAChallenge, error)
+	incrementMFAChallengeAttemptsFn func(ctx context.Context, tokenHash string) (int, error)
+	consumeMFAChallengeFn         func(ctx context.Context, tokenHash string) error
+	createMFAResetTokenFn         func(ctx context.Context, userID, pendingSecret string) (*model.MFAResetToken, error)
 	insertAuditEventFn            func(ctx context.Context, ev db.AuditEvent) error
 }
 
@@ -455,6 +473,78 @@ func (m *mockDB) CheckPasswordReuse(ctx context.Context, userID, newPassword str
 		return m.checkPasswordReuseFn(ctx, userID, newPassword)
 	}
 	return false, nil
+}
+func (m *mockDB) GetMFASecret(ctx context.Context, userID string) (*db.MFAUser, error) {
+	if m.getMFASecretFn != nil {
+		return m.getMFASecretFn(ctx, userID)
+	}
+	return nil, db.ErrNoMFARecord
+}
+func (m *mockDB) GetMFAStatus(ctx context.Context, userID string) (bool, error) {
+	if m.getMFAStatusFn != nil {
+		return m.getMFAStatusFn(ctx, userID)
+	}
+	return false, nil
+}
+func (m *mockDB) CreateMFASecret(ctx context.Context, userID, secret string) error {
+	if m.createMFASecretFn != nil {
+		return m.createMFASecretFn(ctx, userID, secret)
+	}
+	return nil
+}
+func (m *mockDB) EnableMFA(ctx context.Context, userID string) error {
+	if m.enableMFAFn != nil {
+		return m.enableMFAFn(ctx, userID)
+	}
+	return nil
+}
+func (m *mockDB) DisableMFA(ctx context.Context, userID string) error {
+	if m.disableMFAFn != nil {
+		return m.disableMFAFn(ctx, userID)
+	}
+	return nil
+}
+func (m *mockDB) StoreBackupCodeHashes(ctx context.Context, userID string, hashes []string) error {
+	if m.storeBackupCodeHashesFn != nil {
+		return m.storeBackupCodeHashesFn(ctx, userID, hashes)
+	}
+	return nil
+}
+func (m *mockDB) ConsumeBackupCode(ctx context.Context, userID, code string) (bool, error) {
+	if m.consumeBackupCodeFn != nil {
+		return m.consumeBackupCodeFn(ctx, userID, code)
+	}
+	return false, nil
+}
+func (m *mockDB) CreateMFAChallenge(ctx context.Context, userID, tokenHash string, validUntil time.Time) error {
+	if m.createMFAChallengeFn != nil {
+		return m.createMFAChallengeFn(ctx, userID, tokenHash, validUntil)
+	}
+	return nil
+}
+func (m *mockDB) GetMFAChallenge(ctx context.Context, tokenHash string) (*model.MFAChallenge, error) {
+	if m.getMFAChallengeFn != nil {
+		return m.getMFAChallengeFn(ctx, tokenHash)
+	}
+	return nil, db.ErrNoMFAChallengeFound
+}
+func (m *mockDB) IncrementMFAChallengeAttempts(ctx context.Context, tokenHash string) (int, error) {
+	if m.incrementMFAChallengeAttemptsFn != nil {
+		return m.incrementMFAChallengeAttemptsFn(ctx, tokenHash)
+	}
+	return 0, nil
+}
+func (m *mockDB) ConsumeMFAChallenge(ctx context.Context, tokenHash string) error {
+	if m.consumeMFAChallengeFn != nil {
+		return m.consumeMFAChallengeFn(ctx, tokenHash)
+	}
+	return nil
+}
+func (m *mockDB) CreateMFAResetToken(ctx context.Context, userID, pendingSecret string) (*model.MFAResetToken, error) {
+	if m.createMFAResetTokenFn != nil {
+		return m.createMFAResetTokenFn(ctx, userID, pendingSecret)
+	}
+	return &model.MFAResetToken{UserId: userID, PendingSecret: pendingSecret, Token: "test-mfa-reset-token"}, nil
 }
 func (m *mockDB) InsertAuditEvent(ctx context.Context, ev db.AuditEvent) error {
 	if m.insertAuditEventFn != nil {

@@ -83,6 +83,12 @@ Every endpoint must be explicitly registered with a security level in `internal/
 | `WhoAmI` | Unverified | Requires authentication; works before email verification |
 | `ChangePassword` | Unverified | Requires authentication |
 | `CreateVerificationToken` | Unverified | Denied for already-verified users |
+| `SetupMFA` | Unverified | Start TOTP enrollment → secret + otpauth URL + QR PNG |
+| `EnableMFA` | Unverified | Verify one code → enable → issue backup codes |
+| `DisableMFA` | Unverified | Disable (requires password) |
+| `GetMFAStatus` | Unverified | Is MFA enabled for the caller? |
+| `GenerateBackupCodes` | Unverified | Regenerate backup codes (requires password, invalidates old set) |
+| `VerifyMFA` | Public | Exchange pending-login challenge + TOTP/backup code for tokens |
 | `ChangeAccountType` | Admin | |
 | `CreateAdmin` | Admin | |
 | `CreateServiceClient` | Admin | |
@@ -136,6 +142,7 @@ Requires **Go 1.26.2** or later.
 | `REGISTRATION_URL` | `-registration-url` | | Registration page URL — included in invite emails; required when `REGISTRATION_MODE=invite_only` |
 | `VERIFICATION_URL` | `-verification-url` | | Default URL for email verification (used when caller omits `verificationUrl`) |
 | `RESET_PASSWORD_URL` | `-reset-password-url` | | Default URL for password reset (used when caller omits `resetUrl`) |
+| `MFA_RESET_URL` | `-mfa-reset-url` | | Default URL for MFA reset (used when caller omits `mfaResetUrl`) |
 | `LOGIN_LOCKOUT_THRESHOLD` | `-login-lockout-threshold` | `5` | Failed logins before an account is locked out |
 | `LOGIN_LOCKOUT_WINDOW_SECS` | `-login-lockout-window-secs` | `900` | Window over which failed logins are counted |
 | `LOGIN_LOCKOUT_DURATION_SECS` | `-login-lockout-duration-secs` | `900` | How long an account stays locked out |
@@ -159,6 +166,53 @@ Requires **Go 1.26.2** or later.
 | `HIBP_TIMEOUT_MS` | `-hibp-timeout-ms` | `3000` | Timeout for Pwned Passwords API requests |
 | `HIBP_MIN_COUNT` | `-hibp-min-count` | `1` | Minimum breach occurrences before a password is rejected |
 | `PASSWORD_HISTORY_SIZE` | `-password-history-size` | `5` | Recent password hashes kept per user; change/reset reject reusing one |
+| `MFA_ENABLED` | `-mfa-enabled` | `true` | Global TOTP MFA switch; when `false` login skips the MFA step and MFA management endpoints fail closed |
+| `MFA_CODE_LENGTH` | `-mfa-code-length` | `6` | TOTP digits (clamped to 1–8) |
+| `MFA_TIME_STEP` | `-mfa-time-step-secs` | `30` | Seconds per TOTP time-step window |
+| `MFA_GRACE_PERIOD` | `-mfa-grace-period` | `1` | Accept a code from this many windows before/after the current one (clock skew tolerance) |
+| `MFA_BACKUP_CODES` | `-mfa-backup-codes` | `10` | Number of single-use backup codes issued on MFA setup |
+| `MFA_CHALLENGE_TTL_SECS` | `-mfa-challenge-ttl-secs` | `300` | Lifetime of a pending-login MFA challenge token |
+| `MFA_CHALLENGE_MAX_ATTEMPTS` | `-mfa-challenge-max-attempts` | `5` | TOTP/backup-code guesses allowed per challenge before it is invalidated |
+| `MFA_LOCKOUT_THRESHOLD` | `-mfa-lockout-threshold` | `5` | Failed MFA verifications before the user's MFA throttle scope locks |
+| `MFA_LOCKOUT_WINDOW_SECS` | `-mfa-lockout-window-secs` | `900` | Sliding window over which failed MFA verifications are counted |
+| `MFA_LOCKOUT_DURATION_SECS` | `-mfa-lockout-duration-secs` | `900` | How long the MFA throttle scope stays locked |
+
+---
+
+## Multi-Factor Authentication (TOTP)
+
+Per-user, opt-in TOTP second factor (RFC 6238, any standard authenticator app) with single-use backup codes and DB-backed pending-login challenge tokens. The `MFA_*` env vars above tune it; `MFA_ENABLED=false` is the global kill switch — login skips the MFA step entirely and every MFA management endpoint fails closed with `FailedPrecondition` (`mfa is disabled`).
+
+### Enrollment flow
+
+1. **`SetupMFA`** — generates a fresh base32 secret (shown once; the app also displays it grouped for manual entry), stores it **encrypted at rest** (AES-256-GCM via `ENCRYPTION_MASTER_KEY`, same KeyRing as the JWT private key), and returns it together with the `otpauth://` URL and a server-rendered QR PNG (`qr_png_base64`) for second-device enrollment. Re-running replaces the pending secret.
+2. **`EnableMFA`** — the user proves control of the secret by presenting a valid TOTP code; MFA is then enabled and **10 × 8-char Crockford base32 backup codes** are issued (shown exactly once, only Argon2id hashes stored).
+3. **`DisableMFA`** — requires the account password; deletes the enrollment row and all backup codes. **`GenerateBackupCodes`** — requires the password; replaces the old set (invalidating it) and returns the new codes once.
+4. **`GetMFAStatus`** — reports whether the caller has MFA enabled.
+
+### Login flow
+
+When an account with MFA enabled logs in with a correct password, `Login` does **not** issue tokens. Instead it returns `mfa_required: true` plus a short-lived (`MFA_CHALLENGE_TTL_SECS`) single-use **challenge token** (256-bit random value; only its SHA-256 hash is stored). The client then calls **`VerifyMFA`** with the challenge token and either:
+
+- a **TOTP code**, or
+- a **backup code** (case/separator-insensitive; consumed atomically so a code can never be reused).
+
+On success the challenge is consumed and the normal token pair is issued exactly like a completed login (refresh token stored, `remember-me` honored, cookie set via `CookieForwarder`). The response shape is identical for MFA and non-MFA accounts (clients branch on `mfa_required`), so the gate is not an account-enumeration signal. `Refresh` is unchanged: a refresh token is only ever issued after a completed MFA login.
+
+### Brute-force defenses
+
+- Each challenge allows `MFA_CHALLENGE_MAX_ATTEMPTS` guesses before it is invalidated.
+- Failed verifications also count against a per-user **`mfa` throttle scope** in `security_throttle` (`MFA_LOCKOUT_*`), so an attacker who can loop successful password logins still cannot guess TOTP codes without bound.
+- Backup codes are Argon2id-hashed at rest (salted, slow KDF — appropriate for their 40-bit entropy) and claimed with an atomic `UPDATE … WHERE used = false`, so replay is impossible.
+
+### Endpoint error prefixes (contract with the gateway)
+
+| Prefix | Meaning |
+|--------|---------|
+| `mfa is disabled` | Global switch off (`MFA_ENABLED=false`) |
+| `mfa is already enabled` | EnableMFA/SetupMFA on an enabled account |
+| `mfa is not set up` | Enable/GenerateBackupCodes without an enrollment row |
+| `invalid authentication code` | TOTP/backup-code rejection in VerifyMFA |
 
 ---
 
@@ -200,6 +254,9 @@ Behavior:
 | `reset_password_tokens` | Password reset | `token`, `valid_until` |
 | `service_clients` | Service credentials | `client_id`, `client_secret`, `scopes` (TEXT[]) |
 | `registration_invites` | Pre-approved emails for invite-only mode | `email` (unique), `created_at` |
+| `user_mfa` | TOTP MFA enrollment (one row per user) | `enabled`, `secret` (AES-256-GCM blob), `secret_key_id` |
+| `mfa_backup_codes` | Single-use backup codes (Argon2id-hashed) | `code_hash`, `used`, `used_at` |
+| `mfa_challenges` | Pending-login MFA challenge tokens (SHA-256-hashed) | `token_hash`, `attempts`, `valid_until` |
 
 Service clients authenticate via the `GetToken` endpoint and are granted fine-grained access using the `scopes` array (e.g. `user:read`).
 

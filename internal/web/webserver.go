@@ -21,9 +21,11 @@ import (
 	"time"
 
 	"github.com/swayrider/authservice/internal/db"
-	"github.com/swayrider/swlib/http/middlewares"
+	"github.com/swayrider/swlib/http/cookies"
+	"github.com/swayrider/swlib/jwt"
 	"github.com/swayrider/swlib/security"
 	log "github.com/swayrider/swlib/logger"
+	"github.com/swayrider/swlib/totp"
 )
 
 // registerEndpointProfiles marks the web server's pages as publicly
@@ -41,6 +43,7 @@ func registerEndpointProfiles(prefix string) {
 
 	security.PublicEndpoint(prefix + "verify-user")
 	security.PublicEndpoint(prefix + "reset-password")
+	security.PublicEndpoint(prefix + "reset-mfa")
 	security.PublicEndpoint(prefix + "register")
 
 	security.UnverifiedEndpoint(prefix + "registration-complete")
@@ -90,6 +93,23 @@ func New(
 
 	registerEndpointProfiles(prefix)
 
+	// Guard against a silent 401 regression: these pages must be open to
+	// anonymous visitors (the emailed reset/verification links are opened
+	// while logged out). If any is missing from the public profile -- e.g.
+	// the WEB_PATH_PREFIX it was registered under doesn't match the prefix
+	// the mux is mounted on -- middlewares.Auth will hard-401 every GET.
+	for _, ep := range []string{
+		prefix + "verify-user",
+		prefix + "reset-password",
+		prefix + "reset-mfa",
+		prefix + "register",
+	} {
+		if !security.GetEndpointProfileForMethod(ep, http.MethodGet).AllowPublic {
+			lg.Errorf("web endpoint %s is NOT registered as public; anonymous GET will return 401 unauthorized", ep)
+		}
+	}
+	lg.Infof("web server mounted on prefix %q (public pages: verify-user, reset-password, reset-mfa, register)", prefix)
+
 	mux := http.NewServeMux()
 	mux.HandleFunc(
 		fmt.Sprintf("%s%s", prefix, "verify-user"),
@@ -97,13 +117,23 @@ func New(
 	)
 	var breached BreachedChecker
 	var audit AuditEmitter
+	var mfaTotp totp.Config
+	var mfaBackupCodeCount int
+	var mfaResetMaxPasswordAttempts int
 	if cfg != nil {
 		breached = cfg.Breached
 		audit = cfg.Audit
+		mfaTotp = cfg.MFATotp
+		mfaBackupCodeCount = cfg.MFABackupCodeCount
+		mfaResetMaxPasswordAttempts = cfg.MFAResetMaxPasswordAttempts
 	}
 	mux.HandleFunc(
 		fmt.Sprintf("%s%s", prefix, "reset-password"),
 		resetPassword(dbConn, templates, breached, audit, lg),
+	)
+	mux.HandleFunc(
+		fmt.Sprintf("%s%s", prefix, "reset-mfa"),
+		resetMfa(dbConn, templates, mfaTotp, mfaBackupCodeCount, mfaResetMaxPasswordAttempts, audit, lg),
 	)
 	if cfg != nil {
 		mux.HandleFunc(
@@ -133,9 +163,62 @@ func New(
 	return &WebServer{
 		http: &http.Server{
 			Addr:    addr,
-			Handler: middlewares.Auth(
-				mux, publicKeysFn(dbConn), lg),
+			Handler: withOptionalClaims(publicKeysFn(dbConn), lg)(mux),
 		},
+	}
+}
+
+// withOptionalClaims extracts JWT claims (if a valid token is present) and
+// stores them in the request context, but NEVER rejects a request.
+//
+// The web server serves only public email-verification pages (verify-user,
+// reset-password, reset-mfa, register). Anonymous visitors -- exactly the
+// people clicking an emailed reset/verification link -- must always be
+// admitted. Wrapping the mux in middlewares.Auth (which hard-401s any
+// non-public path when no valid token is presented) is what produced the
+// "401 unauthorized" for logged-out users opening the MFA-reset link: a
+// forgotten PublicEndpoint registration or a WEB_PATH_PREFIX mismatch between
+// authservice and the gateway was enough to lock them out. Here we keep the
+// logged-in rendering (sw_userClaims) for users who happen to be signed in,
+// while guaranteeing the pages are reachable for everyone.
+func withOptionalClaims(
+	publicKeysFn security.PublicKeysFn,
+	l *log.Logger,
+) func(http.Handler) http.Handler {
+	lg := l.Derive(
+		log.WithComponent("WebServer"),
+		log.WithFunction("withOptionalClaims"),
+	)
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ctx := r.Context()
+
+			var tokenStr string
+			if auth := r.Header.Get("Authorization"); strings.HasPrefix(auth, "Bearer ") {
+				tokenStr = strings.TrimPrefix(auth, "Bearer ")
+			} else if cookie, err := r.Cookie(cookies.FullCookieName("access_token")); err == nil {
+				if b, derr := cookies.DecodeValue(cookie); derr == nil {
+					tokenStr = string(b)
+				}
+			}
+
+			if tokenStr != "" {
+				if keys, kerr := publicKeysFn(); kerr == nil {
+					for _, k := range keys {
+						claims, verr := jwt.VerifyToken(tokenStr, k, jwt.VerifyDefault)
+						if verr == nil && claims != nil {
+							ctx = context.WithValue(ctx, security.ClaimsKey, claims)
+							ctx = context.WithValue(ctx, security.JwtKey, tokenStr)
+							break
+						}
+					}
+				} else {
+					lg.Debugf("withOptionalClaims: failed to load public keys: %v", kerr)
+				}
+			}
+
+			next.ServeHTTP(w, r.WithContext(ctx))
+		})
 	}
 }
 

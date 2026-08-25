@@ -32,7 +32,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"strings"
 	"sync"
 	"time"
 
@@ -40,6 +39,7 @@ import (
 	"github.com/swayrider/authservice/internal/db"
 	"github.com/swayrider/authservice/internal/server"
 	"github.com/swayrider/authservice/internal/web"
+	"github.com/swayrider/swlib/totp"
 	"github.com/swayrider/authservice/migrations"
 	"github.com/swayrider/grpcclients"
 	"github.com/swayrider/grpcclients/mailclient"
@@ -103,6 +103,17 @@ Environment variables:
 
 	PASSWORD_HISTORY_SIZE			(default: 5)
 
+	MFA_ENABLED				(default: true)
+	MFA_CODE_LENGTH				(default: 6)
+	MFA_TIME_STEP				(default: 30)
+	MFA_GRACE_PERIOD			(default: 1)
+	MFA_BACKUP_CODES			(default: 10)
+	MFA_CHALLENGE_TTL_SECS			(default: 300)
+	MFA_CHALLENGE_MAX_ATTEMPTS		(default: 5)
+	MFA_LOCKOUT_THRESHOLD			(default: 5)
+	MFA_LOCKOUT_WINDOW_SECS			(default: 900)
+	MFA_LOCKOUT_DURATION_SECS		(default: 900)
+
 	MAILSERVICE_HOST
 	MAILSERVICE_PORT
 */
@@ -131,12 +142,15 @@ const (
 
 	FldVerificationUrl  = "verification-url"
 	FldResetPasswordUrl = "reset-password-url"
+	FldMfaResetUrl      = "mfa-reset-url"
 
 	EnvVerificationUrl  = "VERIFICATION_URL"
 	EnvResetPasswordUrl = "RESET_PASSWORD_URL"
+	EnvMfaResetUrl      = "MFA_RESET_URL"
 
 	DefVerificationUrl  = ""
 	DefResetPasswordUrl = ""
+	DefMfaResetUrl      = ""
 
 	FldLoginLockoutThreshold      = "login-lockout-threshold"
 	FldLoginLockoutWindowSecs     = "login-lockout-window-secs"
@@ -204,6 +218,39 @@ const (
 	EnvPasswordHistorySize = "PASSWORD_HISTORY_SIZE"
 	DefPasswordHistorySize = 5
 
+	FldMfaEnabled              = "mfa-enabled"
+	FldMfaCodeLength           = "mfa-code-length"
+	FldMfaTimeStepSecs         = "mfa-time-step-secs"
+	FldMfaGracePeriod          = "mfa-grace-period"
+	FldMfaBackupCodes          = "mfa-backup-codes"
+	FldMfaChallengeTtlSecs     = "mfa-challenge-ttl-secs"
+	FldMfaChallengeMaxAttempts = "mfa-challenge-max-attempts"
+	FldMfaLockoutThreshold     = "mfa-lockout-threshold"
+	FldMfaLockoutWindowSecs    = "mfa-lockout-window-secs"
+	FldMfaLockoutDurationSecs  = "mfa-lockout-duration-secs"
+
+	EnvMfaEnabled              = "MFA_ENABLED"
+	EnvMfaCodeLength           = "MFA_CODE_LENGTH"
+	EnvMfaTimeStepSecs         = "MFA_TIME_STEP"
+	EnvMfaGracePeriod          = "MFA_GRACE_PERIOD"
+	EnvMfaBackupCodes          = "MFA_BACKUP_CODES"
+	EnvMfaChallengeTtlSecs     = "MFA_CHALLENGE_TTL_SECS"
+	EnvMfaChallengeMaxAttempts = "MFA_CHALLENGE_MAX_ATTEMPTS"
+	EnvMfaLockoutThreshold     = "MFA_LOCKOUT_THRESHOLD"
+	EnvMfaLockoutWindowSecs    = "MFA_LOCKOUT_WINDOW_SECS"
+	EnvMfaLockoutDurationSecs  = "MFA_LOCKOUT_DURATION_SECS"
+
+	DefMfaEnabled              = true
+	DefMfaCodeLength           = 6
+	DefMfaTimeStepSecs         = 30
+	DefMfaGracePeriod          = 1
+	DefMfaBackupCodes          = 10
+	DefMfaChallengeTtlSecs     = 300
+	DefMfaChallengeMaxAttempts = 5
+	DefMfaLockoutThreshold     = 5
+	DefMfaLockoutWindowSecs    = 900
+	DefMfaLockoutDurationSecs  = 900
+
 	FldEncryptionMasterKey         = "encryption-master-key"
 	FldEncryptionMasterKeyPrevious = "encryption-master-key-previous"
 
@@ -262,6 +309,9 @@ func main() {
 			app.NewStringConfigField(
 				FldResetPasswordUrl, EnvResetPasswordUrl,
 				"Default URL for password reset (used when caller omits resetUrl)", DefResetPasswordUrl),
+			app.NewStringConfigField(
+				FldMfaResetUrl, EnvMfaResetUrl,
+				"Default URL for MFA/TOTP reset (used when caller omits mfaResetUrl)", DefMfaResetUrl),
 			app.NewIntConfigField(
 				FldLoginLockoutThreshold, EnvLoginLockoutThreshold,
 				"Failed Login attempts before an account is locked out", DefLoginLockoutThreshold),
@@ -324,6 +374,46 @@ func main() {
 				FldPasswordHistorySize, EnvPasswordHistorySize,
 				"How many recent password hashes per user are kept so password change and reset reject reusing one of them",
 				DefPasswordHistorySize),
+			app.NewBoolConfigField(
+				FldMfaEnabled, EnvMfaEnabled,
+				"Global switch for TOTP two-factor authentication; false bypasses the MFA step in login and fails closed on MFA management endpoints",
+				DefMfaEnabled),
+			app.NewIntConfigField(
+				FldMfaCodeLength, EnvMfaCodeLength,
+				"Number of digits in TOTP codes (1-8; clamped)",
+				DefMfaCodeLength),
+			app.NewIntConfigField(
+				FldMfaTimeStepSecs, EnvMfaTimeStepSecs,
+				"TOTP time-step window in seconds",
+				DefMfaTimeStepSecs),
+			app.NewIntConfigField(
+				FldMfaGracePeriod, EnvMfaGracePeriod,
+				"Accept a TOTP code from this many windows before/after the current one (clock skew tolerance)",
+				DefMfaGracePeriod),
+			app.NewIntConfigField(
+				FldMfaBackupCodes, EnvMfaBackupCodes,
+				"Number of single-use backup codes issued on MFA setup",
+				DefMfaBackupCodes),
+			app.NewIntConfigField(
+				FldMfaChallengeTtlSecs, EnvMfaChallengeTtlSecs,
+				"Lifetime in seconds of a pending-login MFA challenge token",
+				DefMfaChallengeTtlSecs),
+			app.NewIntConfigField(
+				FldMfaChallengeMaxAttempts, EnvMfaChallengeMaxAttempts,
+				"TOTP/backup-code guesses allowed per MFA challenge before it is invalidated",
+				DefMfaChallengeMaxAttempts),
+			app.NewIntConfigField(
+				FldMfaLockoutThreshold, EnvMfaLockoutThreshold,
+				"Failed MFA verifications before the user's MFA throttle scope locks",
+				DefMfaLockoutThreshold),
+			app.NewIntConfigField(
+				FldMfaLockoutWindowSecs, EnvMfaLockoutWindowSecs,
+				"Sliding window in seconds over which failed MFA verifications are counted",
+				DefMfaLockoutWindowSecs),
+			app.NewIntConfigField(
+				FldMfaLockoutDurationSecs, EnvMfaLockoutDurationSecs,
+				"How long in seconds the MFA throttle scope stays locked once the threshold is reached",
+				DefMfaLockoutDurationSecs),
 			app.NewStringConfigField(
 				FldEncryptionMasterKey, EnvEncryptionMasterKey,
 				"Base64-encoded 256-bit master key used to encrypt the JWT signing private key at rest (required; generate with `openssl rand -base64 32`)",
@@ -638,6 +728,7 @@ func grpcAuthRegistrar(r grpc.ServiceRegistrar, a app.App) {
 	registrationUrl := app.GetConfigField[string](a.Config(), FldRegistrationUrl)
 	verificationUrl := app.GetConfigField[string](a.Config(), FldVerificationUrl)
 	resetPasswordUrl := app.GetConfigField[string](a.Config(), FldResetPasswordUrl)
+	mfaResetUrl := app.GetConfigField[string](a.Config(), FldMfaResetUrl)
 
 	if registrationMode != "open" && registrationMode != "invite_only" {
 		lg.Fatalf("invalid REGISTRATION_MODE %q (must be 'open' or 'invite_only')", registrationMode)
@@ -656,6 +747,19 @@ func grpcAuthRegistrar(r grpc.ServiceRegistrar, a app.App) {
 		EmailIPLockoutDuration: time.Duration(app.GetConfigField[int](a.Config(), FldEmailIPLockoutDurationSecs)) * time.Second,
 	}
 
+	mfaCfg := server.MFAConfig{
+		Enabled:              app.GetConfigField[bool](a.Config(), FldMfaEnabled),
+		CodeLength:           app.GetConfigField[int](a.Config(), FldMfaCodeLength),
+		TimeStep:             time.Duration(app.GetConfigField[int](a.Config(), FldMfaTimeStepSecs)) * time.Second,
+		GracePeriod:          app.GetConfigField[int](a.Config(), FldMfaGracePeriod),
+		BackupCodeCount:      app.GetConfigField[int](a.Config(), FldMfaBackupCodes),
+		ChallengeTTL:         time.Duration(app.GetConfigField[int](a.Config(), FldMfaChallengeTtlSecs)) * time.Second,
+		ChallengeMaxAttempts: app.GetConfigField[int](a.Config(), FldMfaChallengeMaxAttempts),
+		LockoutMaxAttempts:   app.GetConfigField[int](a.Config(), FldMfaLockoutThreshold),
+		LockoutWindow:        time.Duration(app.GetConfigField[int](a.Config(), FldMfaLockoutWindowSecs)) * time.Second,
+		LockoutDuration:      time.Duration(app.GetConfigField[int](a.Config(), FldMfaLockoutDurationSecs)) * time.Second,
+	}
+
 	srv := server.NewAuthServer(
 		a.Database().(*db.DB),
 		a.Logger(),
@@ -665,7 +769,9 @@ func grpcAuthRegistrar(r grpc.ServiceRegistrar, a app.App) {
 		registrationUrl,
 		verificationUrl,
 		resetPasswordUrl,
+		mfaResetUrl,
 		throttle,
+		mfaCfg,
 		sharedAuditWriter(a),
 		sharedHIBPClient(a),
 	)
@@ -724,11 +830,7 @@ func startWebServer(a app.App) error {
 	mailClient := app.GetServiceClient[*mailclient.Client](a, "mailservice")
 	mailerAddress := app.GetConfigField[string](a.Config(), FldMailerAddress)
 	registrationMode := app.GetConfigField[string](a.Config(), FldRegistrationMode)
-
-	// Derive the verify-user URL from web port and path prefix.
-	// In production, override REGISTRATION_URL to match the external hostname.
-	trimmedPrefix := strings.TrimRight(prefix, "/")
-	verifyUserUrl := fmt.Sprintf("http://localhost:%d%s/verify-user", port, trimmedPrefix)
+	verifyUserUrl := app.GetConfigField[string](a.Config(), FldVerificationUrl)
 
 	regCfg := &web.RegisterConfig{
 		MailClient:       mailClient,
@@ -737,6 +839,13 @@ func startWebServer(a app.App) error {
 		VerifyUserUrl:    verifyUserUrl,
 		Breached:         sharedHIBPClient(a),
 		Audit:            sharedAuditWriter(a),
+		MFATotp: totp.Config{
+			CodeLength:  app.GetConfigField[int](a.Config(), FldMfaCodeLength),
+			TimeStep:    time.Duration(app.GetConfigField[int](a.Config(), FldMfaTimeStepSecs)) * time.Second,
+			GracePeriod: app.GetConfigField[int](a.Config(), FldMfaGracePeriod),
+		},
+		MFABackupCodeCount:          app.GetConfigField[int](a.Config(), FldMfaBackupCodes),
+		MFAResetMaxPasswordAttempts: app.GetConfigField[int](a.Config(), FldMfaLockoutThreshold),
 	}
 
 	ws := web.New(

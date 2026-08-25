@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -978,5 +979,167 @@ func TestGetToken_RecordsSuccessOnCorrectCredentials(t *testing.T) {
 	}
 	if !*recordedSuccess {
 		t.Error("expected success to be recorded as success=true")
+	}
+}
+
+// =============================================================================
+// Login MFA gate Tests
+// =============================================================================
+
+func TestLogin_MFAEnabledAccount_ReturnsChallengeWithoutTokens(t *testing.T) {
+	createRefreshTokenCalled := false
+	var storedHash string
+	mdb := &mockDB{
+		getUserByEmailFn: func(_ context.Context, _ string) (*model.UserInternal, error) {
+			return testUser(), nil
+		},
+		getMFAStatusFn: func(_ context.Context, userID string) (bool, error) {
+			if userID != "test-user-id" {
+				t.Errorf("GetMFAStatus userID = %q, want test-user-id", userID)
+			}
+			return true, nil
+		},
+		createMFAChallengeFn: func(_ context.Context, userID, tokenHash string, _ time.Time) error {
+			storedHash = tokenHash
+			return nil
+		},
+		createRefreshTokenFn: func(_ context.Context, _ *model.User, _, _, _ string) (*model.RefreshToken, error) {
+			createRefreshTokenCalled = true
+			return &model.RefreshToken{Token: "should-not-happen"}, nil
+		},
+	}
+	srv := newTestServerWithMFA(mdb, &noopMailSender{}, testMFAConfig())
+	ctx := context.Background()
+
+	resp, err := srv.Login(ctx, &authv1.LoginRequest{
+		Email:    "test@example.com",
+		Password: testPassword,
+	})
+	if err != nil {
+		t.Fatalf("Login failed: %v", err)
+	}
+	if !resp.MfaRequired {
+		t.Error("MfaRequired = false, want true for an MFA-enabled account")
+	}
+	if resp.MfaToken == "" {
+		t.Error("MfaToken must be set on the pending login response")
+	}
+	if resp.AccessToken != "" || resp.RefreshToken != "" {
+		t.Error("no tokens may be issued on a pending MFA login")
+	}
+	if createRefreshTokenCalled {
+		t.Error("createAuthTokens must not run while the MFA step is pending")
+	}
+	// Only the SHA-256 hash is persisted, never the raw token.
+	if storedHash != model.HashToken(resp.MfaToken) {
+		t.Errorf("stored hash %q != SHA-256 of issued token", storedHash)
+	}
+}
+
+func TestLogin_MFADisabledAccount_Unchanged(t *testing.T) {
+	mdb := &mockDB{
+		getUserByEmailFn: func(_ context.Context, _ string) (*model.UserInternal, error) {
+			return testUser(), nil
+		},
+		getMFAStatusFn: func(_ context.Context, _ string) (bool, error) {
+			return false, nil
+		},
+		createRefreshTokenFn: func(_ context.Context, user *model.User, _, _, _ string) (*model.RefreshToken, error) {
+			return &model.RefreshToken{
+				Token:      "test-refresh-token",
+				UserId:     user.ID,
+				ValidUntil: time.Now().Add(30 * 24 * time.Hour),
+			}, nil
+		},
+	}
+	srv := newTestServerWithMFA(mdb, &noopMailSender{}, testMFAConfig())
+	ctx := context.Background()
+
+	resp, err := srv.Login(ctx, &authv1.LoginRequest{
+		Email:    "test@example.com",
+		Password: testPassword,
+	})
+	if err != nil {
+		t.Fatalf("Login failed: %v", err)
+	}
+	if resp.MfaRequired {
+		t.Error("MfaRequired = true, want false for an account without MFA")
+	}
+	if resp.AccessToken == "" || resp.RefreshToken == "" {
+		t.Error("expected the normal token pair for a non-MFA login")
+	}
+}
+
+func TestLogin_GlobalSwitchOff_BypassesMFA(t *testing.T) {
+	statusLookupCalled := false
+	mdb := &mockDB{
+		getUserByEmailFn: func(_ context.Context, _ string) (*model.UserInternal, error) {
+			return testUser(), nil
+		},
+		getMFAStatusFn: func(_ context.Context, _ string) (bool, error) {
+			statusLookupCalled = true
+			return true, nil // account has MFA enabled, but the switch is off
+		},
+		createRefreshTokenFn: func(_ context.Context, user *model.User, _, _, _ string) (*model.RefreshToken, error) {
+			return &model.RefreshToken{
+				Token:      "test-refresh-token",
+				UserId:     user.ID,
+				ValidUntil: time.Now().Add(30 * 24 * time.Hour),
+			}, nil
+		},
+	}
+	// newTestServer: zero-value MFAConfig, MFA disabled globally.
+	srv := newTestServer(mdb, &noopMailSender{})
+	ctx := context.Background()
+
+	resp, err := srv.Login(ctx, &authv1.LoginRequest{
+		Email:    "test@example.com",
+		Password: testPassword,
+	})
+	if err != nil {
+		t.Fatalf("Login failed: %v", err)
+	}
+	if resp.MfaRequired || resp.MfaToken != "" {
+		t.Error("MFA step must be bypassed when the global switch is off")
+	}
+	if resp.AccessToken == "" || resp.RefreshToken == "" {
+		t.Error("expected the normal token pair when MFA is bypassed")
+	}
+	if statusLookupCalled {
+		t.Error("GetMFAStatus must not be called when the global switch is off")
+	}
+}
+
+// =============================================================================
+// CookieForwarder MFA Tests
+// =============================================================================
+
+func TestCookieForwarder_VerifyMFASetsCookie(t *testing.T) {
+	ctx := context.Background()
+	w := httptest.NewRecorder()
+
+	if err := CookieForwarder(ctx, w, &authv1.VerifyMFAResponse{RefreshToken: "mfa-refresh-token"}); err != nil {
+		t.Fatalf("CookieForwarder failed: %v", err)
+	}
+
+	cookie := findSetCookie(t, w, "refresh_token")
+	// The cookie carries the token base64-encoded (cookies.NewServerCookie).
+	if got := cookie.Value; got != base64.StdEncoding.EncodeToString([]byte("mfa-refresh-token")) {
+		t.Errorf("cookie value = %q, want base64 of %q", got, "mfa-refresh-token")
+	}
+}
+
+func TestCookieForwarder_EmptyRefreshTokenSetsNoCookie(t *testing.T) {
+	ctx := context.Background()
+	w := httptest.NewRecorder()
+
+	// A pending MFA login response has no refresh token yet; it must not
+	// emit an empty cookie that would clobber a legitimate one.
+	if err := CookieForwarder(ctx, w, &authv1.LoginResponse{MfaRequired: true, MfaToken: "challenge-token"}); err != nil {
+		t.Fatalf("CookieForwarder failed: %v", err)
+	}
+
+	if cookies := w.Result().Cookies(); len(cookies) != 0 {
+		t.Errorf("expected no Set-Cookie, got %v", cookies)
 	}
 }

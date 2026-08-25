@@ -8,20 +8,27 @@ require (
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.29.0
 	github.com/lib/pq v1.12.3
 	github.com/rubenv/sql-migrate v1.8.1
-	github.com/swayrider/grpcclients v0.1.7
-	github.com/swayrider/protos v0.1.4
-	github.com/swayrider/swlib v0.1.10-0.20260821101343-2a72830a6e86
+	github.com/swayrider/grpcclients v0.1.8-0.20260825091345-f02752704ed9
+	github.com/swayrider/protos v0.1.5-0.20260825090901-5e0ab7c72991
+	github.com/swayrider/swlib v0.1.10-0.20260825091750-8ad760773095
 	github.com/wagslane/go-password-validator v0.3.0
+	github.com/yeqown/go-qrcode/v2 v2.3.0
+	github.com/yeqown/go-qrcode/writer/standard v1.4.0
 	google.golang.org/grpc v1.80.0
 	google.golang.org/protobuf v1.36.11
 )
 
 require (
+	github.com/fogleman/gg v1.3.0 // indirect
 	github.com/go-gorp/gorp/v3 v3.1.0 // indirect
+	github.com/golang/freetype v0.0.0-20170609003504-e2365dfdc4a0 // indirect
 	github.com/joho/godotenv v1.5.1 // indirect
 	github.com/mattn/go-sqlite3 v1.14.42 // indirect
+	github.com/pkg/errors v0.9.1 // indirect
 	github.com/rs/cors v1.11.1 // indirect
+	github.com/yeqown/reedsolomon v1.0.0 // indirect
 	golang.org/x/crypto v0.47.0 // indirect
+	golang.org/x/image v0.24.0 // indirect
 	golang.org/x/net v0.49.0 // indirect
 	golang.org/x/sys v0.40.0 // indirect
 	golang.org/x/text v0.36.0 // indirect

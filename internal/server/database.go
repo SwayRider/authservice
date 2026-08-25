@@ -67,6 +67,20 @@ type Database interface {
 	AddToPasswordHistory(ctx context.Context, userID, passwordHash string) error
 	CheckPasswordReuse(ctx context.Context, userID, newPassword string) (bool, error)
 
+	// MFA operations (TOTP enrollment, backup codes, pending-login challenges)
+	GetMFASecret(ctx context.Context, userID string) (*db.MFAUser, error)
+	GetMFAStatus(ctx context.Context, userID string) (bool, error)
+	CreateMFASecret(ctx context.Context, userID, secret string) error
+	EnableMFA(ctx context.Context, userID string) error
+	DisableMFA(ctx context.Context, userID string) error
+	StoreBackupCodeHashes(ctx context.Context, userID string, hashes []string) error
+	ConsumeBackupCode(ctx context.Context, userID, code string) (bool, error)
+	CreateMFAChallenge(ctx context.Context, userID, tokenHash string, validUntil time.Time) error
+	GetMFAChallenge(ctx context.Context, tokenHash string) (*model.MFAChallenge, error)
+	IncrementMFAChallengeAttempts(ctx context.Context, tokenHash string) (int, error)
+	ConsumeMFAChallenge(ctx context.Context, tokenHash string) error
+	CreateMFAResetToken(ctx context.Context, userID, pendingSecret string) (*model.MFAResetToken, error)
+
 	// Audit logging
 	InsertAuditEvent(ctx context.Context, ev db.AuditEvent) error
 }

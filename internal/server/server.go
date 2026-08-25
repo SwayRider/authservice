@@ -103,6 +103,10 @@ func init() {
 	// ResetPassword - Public: complete password reset with token
 	security.PublicEndpoint("/auth.v1.AuthService/ResetPassword")
 
+	// RequestMfaReset - Public: initiate email-verified MFA/TOTP reset flow
+	// (must be reachable with no access token -- the user is locked out)
+	security.PublicEndpoint("/auth.v1.AuthService/RequestMfaReset")
+
 	// VerifyEmail - Public: request new verification email
 	security.PublicEndpoint("/auth.v1.AuthService/VerifyEmail")
 
@@ -114,6 +118,18 @@ func init() {
 	security.ServiceClientEndpoint("/auth.v1.AuthService/WhoIs", []string{
 		"user:read",
 	})
+
+	// MFA - Unverified (any authenticated user, verified or not): manage
+	// their own TOTP enrollment
+	security.UnverifiedEndpoint("/auth.v1.AuthService/SetupMFA")
+	security.UnverifiedEndpoint("/auth.v1.AuthService/EnableMFA")
+	security.UnverifiedEndpoint("/auth.v1.AuthService/DisableMFA")
+	security.UnverifiedEndpoint("/auth.v1.AuthService/GetMFAStatus")
+	security.UnverifiedEndpoint("/auth.v1.AuthService/GenerateBackupCodes")
+
+	// VerifyMFA - Public: complete a pending-login MFA challenge (no tokens
+	// exist yet at that point, so it cannot require authentication)
+	security.PublicEndpoint("/auth.v1.AuthService/VerifyMFA")
 
 	// HealthService Endpoints
 	// -----------------------
@@ -147,7 +163,9 @@ type AuthServer struct {
 	registrationUrl  string         // Registration page URL sent in invite emails (REGISTRATION_URL)
 	verificationUrl  string         // Default verification URL when caller omits it (VERIFICATION_URL)
 	resetPasswordUrl string         // Default password-reset URL when caller omits it (RESET_PASSWORD_URL)
+	mfaResetUrl      string         // Default MFA-reset URL when caller omits it (MFA_RESET_URL)
 	throttle         ThrottleConfig // Account lockout / email cooldown thresholds
+	mfa              MFAConfig     // TOTP second-factor configuration (zero value = feature off)
 	audit            *AuditWriter   // Async audit_log event writer
 	breached         BreachedChecker // Password breach detection (nil = feature off)
 	l                *log.Logger    // Logger instance
@@ -179,7 +197,9 @@ func NewAuthServer(
 	registrationUrl string,
 	verificationUrl string,
 	resetPasswordUrl string,
+	mfaResetUrl string,
 	throttle ThrottleConfig,
+	mfa MFAConfig,
 	audit *AuditWriter,
 	breached BreachedChecker,
 ) *AuthServer {
@@ -191,7 +211,9 @@ func NewAuthServer(
 		registrationUrl:  registrationUrl,
 		verificationUrl:  verificationUrl,
 		resetPasswordUrl: resetPasswordUrl,
+		mfaResetUrl:      mfaResetUrl,
 		throttle:         throttle,
+		mfa:              mfa,
 		audit:            audit,
 		breached:         breached,
 		l: lgr.Derive(
