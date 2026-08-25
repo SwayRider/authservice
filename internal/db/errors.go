@@ -20,4 +20,5 @@ var (
 	ErrInviteNotFound            = errors.New("invite not found")
 	ErrNoMFARecord               = errors.New("no MFA record found")
 	ErrNoMFAChallengeFound       = errors.New("no MFA challenge found")
+	ErrNoMFAResetTokenFound      = errors.New("no MFA reset token found")
 )

@@ -79,6 +79,7 @@ type Database interface {
 	GetMFAChallenge(ctx context.Context, tokenHash string) (*model.MFAChallenge, error)
 	IncrementMFAChallengeAttempts(ctx context.Context, tokenHash string) (int, error)
 	ConsumeMFAChallenge(ctx context.Context, tokenHash string) error
+	CreateMFAResetToken(ctx context.Context, userID, pendingSecret string) (*model.MFAResetToken, error)
 
 	// Audit logging
 	InsertAuditEvent(ctx context.Context, ev db.AuditEvent) error

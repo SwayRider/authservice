@@ -42,6 +42,8 @@ const (
 	AuditMFAVerified              AuditEventType = "auth.mfa_verified"
 	AuditMFAVerifyFailed          AuditEventType = "auth.mfa_verify_failed"
 	AuditMFABackupCodesGenerated  AuditEventType = "auth.mfa_backup_codes_generated"
+	AuditMFAResetRequested        AuditEventType = "auth.mfa_reset_requested"
+	AuditMFAReset                 AuditEventType = "auth.mfa_reset"
 )
 
 // AuditEvent is a single row to be written to audit_log. UserID identifies

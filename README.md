@@ -142,6 +142,7 @@ Requires **Go 1.26.2** or later.
 | `REGISTRATION_URL` | `-registration-url` | | Registration page URL — included in invite emails; required when `REGISTRATION_MODE=invite_only` |
 | `VERIFICATION_URL` | `-verification-url` | | Default URL for email verification (used when caller omits `verificationUrl`) |
 | `RESET_PASSWORD_URL` | `-reset-password-url` | | Default URL for password reset (used when caller omits `resetUrl`) |
+| `MFA_RESET_URL` | `-mfa-reset-url` | | Default URL for MFA reset (used when caller omits `mfaResetUrl`) |
 | `LOGIN_LOCKOUT_THRESHOLD` | `-login-lockout-threshold` | `5` | Failed logins before an account is locked out |
 | `LOGIN_LOCKOUT_WINDOW_SECS` | `-login-lockout-window-secs` | `900` | Window over which failed logins are counted |
 | `LOGIN_LOCKOUT_DURATION_SECS` | `-login-lockout-duration-secs` | `900` | How long an account stays locked out |

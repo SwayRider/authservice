@@ -32,7 +32,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"strings"
 	"sync"
 	"time"
 
@@ -40,6 +39,7 @@ import (
 	"github.com/swayrider/authservice/internal/db"
 	"github.com/swayrider/authservice/internal/server"
 	"github.com/swayrider/authservice/internal/web"
+	"github.com/swayrider/swlib/totp"
 	"github.com/swayrider/authservice/migrations"
 	"github.com/swayrider/grpcclients"
 	"github.com/swayrider/grpcclients/mailclient"
@@ -142,12 +142,15 @@ const (
 
 	FldVerificationUrl  = "verification-url"
 	FldResetPasswordUrl = "reset-password-url"
+	FldMfaResetUrl      = "mfa-reset-url"
 
 	EnvVerificationUrl  = "VERIFICATION_URL"
 	EnvResetPasswordUrl = "RESET_PASSWORD_URL"
+	EnvMfaResetUrl      = "MFA_RESET_URL"
 
 	DefVerificationUrl  = ""
 	DefResetPasswordUrl = ""
+	DefMfaResetUrl      = ""
 
 	FldLoginLockoutThreshold      = "login-lockout-threshold"
 	FldLoginLockoutWindowSecs     = "login-lockout-window-secs"
@@ -306,6 +309,9 @@ func main() {
 			app.NewStringConfigField(
 				FldResetPasswordUrl, EnvResetPasswordUrl,
 				"Default URL for password reset (used when caller omits resetUrl)", DefResetPasswordUrl),
+			app.NewStringConfigField(
+				FldMfaResetUrl, EnvMfaResetUrl,
+				"Default URL for MFA/TOTP reset (used when caller omits mfaResetUrl)", DefMfaResetUrl),
 			app.NewIntConfigField(
 				FldLoginLockoutThreshold, EnvLoginLockoutThreshold,
 				"Failed Login attempts before an account is locked out", DefLoginLockoutThreshold),
@@ -722,6 +728,7 @@ func grpcAuthRegistrar(r grpc.ServiceRegistrar, a app.App) {
 	registrationUrl := app.GetConfigField[string](a.Config(), FldRegistrationUrl)
 	verificationUrl := app.GetConfigField[string](a.Config(), FldVerificationUrl)
 	resetPasswordUrl := app.GetConfigField[string](a.Config(), FldResetPasswordUrl)
+	mfaResetUrl := app.GetConfigField[string](a.Config(), FldMfaResetUrl)
 
 	if registrationMode != "open" && registrationMode != "invite_only" {
 		lg.Fatalf("invalid REGISTRATION_MODE %q (must be 'open' or 'invite_only')", registrationMode)
@@ -762,6 +769,7 @@ func grpcAuthRegistrar(r grpc.ServiceRegistrar, a app.App) {
 		registrationUrl,
 		verificationUrl,
 		resetPasswordUrl,
+		mfaResetUrl,
 		throttle,
 		mfaCfg,
 		sharedAuditWriter(a),
@@ -822,11 +830,7 @@ func startWebServer(a app.App) error {
 	mailClient := app.GetServiceClient[*mailclient.Client](a, "mailservice")
 	mailerAddress := app.GetConfigField[string](a.Config(), FldMailerAddress)
 	registrationMode := app.GetConfigField[string](a.Config(), FldRegistrationMode)
-
-	// Derive the verify-user URL from web port and path prefix.
-	// In production, override REGISTRATION_URL to match the external hostname.
-	trimmedPrefix := strings.TrimRight(prefix, "/")
-	verifyUserUrl := fmt.Sprintf("http://localhost:%d%s/verify-user", port, trimmedPrefix)
+	verifyUserUrl := app.GetConfigField[string](a.Config(), FldVerificationUrl)
 
 	regCfg := &web.RegisterConfig{
 		MailClient:       mailClient,
@@ -835,6 +839,13 @@ func startWebServer(a app.App) error {
 		VerifyUserUrl:    verifyUserUrl,
 		Breached:         sharedHIBPClient(a),
 		Audit:            sharedAuditWriter(a),
+		MFATotp: totp.Config{
+			CodeLength:  app.GetConfigField[int](a.Config(), FldMfaCodeLength),
+			TimeStep:    time.Duration(app.GetConfigField[int](a.Config(), FldMfaTimeStepSecs)) * time.Second,
+			GracePeriod: app.GetConfigField[int](a.Config(), FldMfaGracePeriod),
+		},
+		MFABackupCodeCount:          app.GetConfigField[int](a.Config(), FldMfaBackupCodes),
+		MFAResetMaxPasswordAttempts: app.GetConfigField[int](a.Config(), FldMfaLockoutThreshold),
 	}
 
 	ws := web.New(

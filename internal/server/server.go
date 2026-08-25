@@ -103,6 +103,10 @@ func init() {
 	// ResetPassword - Public: complete password reset with token
 	security.PublicEndpoint("/auth.v1.AuthService/ResetPassword")
 
+	// RequestMfaReset - Public: initiate email-verified MFA/TOTP reset flow
+	// (must be reachable with no access token -- the user is locked out)
+	security.PublicEndpoint("/auth.v1.AuthService/RequestMfaReset")
+
 	// VerifyEmail - Public: request new verification email
 	security.PublicEndpoint("/auth.v1.AuthService/VerifyEmail")
 
@@ -159,6 +163,7 @@ type AuthServer struct {
 	registrationUrl  string         // Registration page URL sent in invite emails (REGISTRATION_URL)
 	verificationUrl  string         // Default verification URL when caller omits it (VERIFICATION_URL)
 	resetPasswordUrl string         // Default password-reset URL when caller omits it (RESET_PASSWORD_URL)
+	mfaResetUrl      string         // Default MFA-reset URL when caller omits it (MFA_RESET_URL)
 	throttle         ThrottleConfig // Account lockout / email cooldown thresholds
 	mfa              MFAConfig     // TOTP second-factor configuration (zero value = feature off)
 	audit            *AuditWriter   // Async audit_log event writer
@@ -192,6 +197,7 @@ func NewAuthServer(
 	registrationUrl string,
 	verificationUrl string,
 	resetPasswordUrl string,
+	mfaResetUrl string,
 	throttle ThrottleConfig,
 	mfa MFAConfig,
 	audit *AuditWriter,
@@ -205,6 +211,7 @@ func NewAuthServer(
 		registrationUrl:  registrationUrl,
 		verificationUrl:  verificationUrl,
 		resetPasswordUrl: resetPasswordUrl,
+		mfaResetUrl:      mfaResetUrl,
 		throttle:         throttle,
 		mfa:              mfa,
 		audit:            audit,

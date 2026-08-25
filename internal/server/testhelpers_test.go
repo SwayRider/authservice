@@ -82,25 +82,25 @@ func testServiceClient(scopes []string) *model.ServiceClientInternal {
 }
 
 func newTestServer(d Database, m MailSender) *AuthServer {
-	return NewAuthServer(d, log.New(), m, "from@example.com", "open", "", "", "", ThrottleConfig{}, MFAConfig{}, NewAuditWriter(10, log.New()), nil)
+	return NewAuthServer(d, log.New(), m, "from@example.com", "open", "", "", "", "", ThrottleConfig{}, MFAConfig{}, NewAuditWriter(10, log.New()), nil)
 }
 
 // newTestServerWithThrottle is like newTestServer but with throttling enabled,
 // for tests that specifically exercise lockout/cooldown behavior.
 func newTestServerWithThrottle(d Database, m MailSender, throttle ThrottleConfig) *AuthServer {
-	return NewAuthServer(d, log.New(), m, "from@example.com", "open", "", "", "", throttle, MFAConfig{}, NewAuditWriter(10, log.New()), nil)
+	return NewAuthServer(d, log.New(), m, "from@example.com", "open", "", "", "", "", throttle, MFAConfig{}, NewAuditWriter(10, log.New()), nil)
 }
 
 // newTestServerWithMFA is like newTestServer but with the given MFA
 // configuration, for tests that exercise the TOTP enrollment/login flow.
 func newTestServerWithMFA(d Database, m MailSender, mfa MFAConfig) *AuthServer {
-	return NewAuthServer(d, log.New(), m, "from@example.com", "open", "", "", "", ThrottleConfig{}, mfa, NewAuditWriter(10, log.New()), nil)
+	return NewAuthServer(d, log.New(), m, "from@example.com", "open", "", "", "", "", ThrottleConfig{}, mfa, NewAuditWriter(10, log.New()), nil)
 }
 
 // newTestServerWithBreached is like newTestServer but with a breach checker
 // installed, for tests that exercise the HIBP integration.
 func newTestServerWithBreached(d Database, m MailSender, b BreachedChecker) *AuthServer {
-	return NewAuthServer(d, log.New(), m, "from@example.com", "open", "", "", "", ThrottleConfig{}, MFAConfig{}, NewAuditWriter(10, log.New()), b)
+	return NewAuthServer(d, log.New(), m, "from@example.com", "open", "", "", "", "", ThrottleConfig{}, MFAConfig{}, NewAuditWriter(10, log.New()), b)
 }
 
 
@@ -242,6 +242,7 @@ type mockDB struct {
 	getMFAChallengeFn             func(ctx context.Context, tokenHash string) (*model.MFAChallenge, error)
 	incrementMFAChallengeAttemptsFn func(ctx context.Context, tokenHash string) (int, error)
 	consumeMFAChallengeFn         func(ctx context.Context, tokenHash string) error
+	createMFAResetTokenFn         func(ctx context.Context, userID, pendingSecret string) (*model.MFAResetToken, error)
 	insertAuditEventFn            func(ctx context.Context, ev db.AuditEvent) error
 }
 
@@ -538,6 +539,12 @@ func (m *mockDB) ConsumeMFAChallenge(ctx context.Context, tokenHash string) erro
 		return m.consumeMFAChallengeFn(ctx, tokenHash)
 	}
 	return nil
+}
+func (m *mockDB) CreateMFAResetToken(ctx context.Context, userID, pendingSecret string) (*model.MFAResetToken, error) {
+	if m.createMFAResetTokenFn != nil {
+		return m.createMFAResetTokenFn(ctx, userID, pendingSecret)
+	}
+	return &model.MFAResetToken{UserId: userID, PendingSecret: pendingSecret, Token: "test-mfa-reset-token"}, nil
 }
 func (m *mockDB) InsertAuditEvent(ctx context.Context, ev db.AuditEvent) error {
 	if m.insertAuditEventFn != nil {

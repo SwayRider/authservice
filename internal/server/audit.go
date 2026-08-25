@@ -292,6 +292,21 @@ func (s *AuthServer) auditMFABackupCodesGenerated(ctx context.Context, userID st
 	})
 }
 
+// auditMFAResetRequested records a successful (credentials-verified) request
+// to email an MFA reset link. This does not mean the reset was completed --
+// see the AuditMFAReset event, emitted by the web confirmation handler
+// (internal/web/reset_mfa.go) once the emailed link is actually used.
+func (s *AuthServer) auditMFAResetRequested(ctx context.Context, userID, email string) {
+	ip, ua := auditIPUA(ctx)
+	s.audit.emit(db.AuditEvent{
+		EventType: db.AuditMFAResetRequested,
+		UserID:    strPtr(userID),
+		Email:     email,
+		IPAddress: ip,
+		UserAgent: ua,
+	})
+}
+
 // auditAccountLocked records the transition of identifier into lockout
 // within scope. For db.ScopeLogin, identifier is a normalized email; for
 // db.ScopeGetToken it's a service client ID, which isn't an "email" so it

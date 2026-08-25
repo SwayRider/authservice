@@ -26,6 +26,7 @@ import (
 	"github.com/swayrider/grpcclients/mailclient"
 	"github.com/swayrider/swlib/crypto"
 	log "github.com/swayrider/swlib/logger"
+	"github.com/swayrider/swlib/totp"
 )
 
 // BreachedChecker reports whether a password has appeared in a known data
@@ -43,13 +44,18 @@ type AuditEmitter interface {
 }
 
 // RegisterConfig holds configuration for the user registration web handler.
+// Despite the name, it is also the config bag for the other stateful web
+// handlers (reset-password, reset-mfa) that share Breached/Audit.
 type RegisterConfig struct {
-	MailClient       *mailclient.Client
-	MailerAddress    string
-	RegistrationMode string          // "open" or "invite_only"
-	VerifyUserUrl    string          // full base URL for /verify-user, used in verification emails
-	Breached         BreachedChecker // password breach detection (nil = off)
-	Audit            AuditEmitter    // audit event writer (nil = off)
+	MailClient         *mailclient.Client
+	MailerAddress      string
+	RegistrationMode   string          // "open" or "invite_only"
+	VerifyUserUrl      string          // full base URL for /verify-user, used in verification emails
+	Breached           BreachedChecker // password breach detection (nil = off)
+	Audit              AuditEmitter    // audit event writer (nil = off)
+	MFATotp                  totp.Config // TOTP validation params for the reset-mfa confirmation code
+	MFABackupCodeCount       int         // backup codes issued when a reset completes
+	MFAResetMaxPasswordAttempts int      // failed password attempts allowed on the reset-mfa page before the link is invalidated
 }
 
 // register returns an HTTP handler for the web registration flow.

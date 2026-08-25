@@ -369,7 +369,11 @@ func (s *AuthServer) VerifyMFA(
 		return nil, status.Error(codes.Internal, "internal error")
 	}
 
-	valid := s.verifyCode(ctx, mfaUser.Secret, challenge.UserID, req.Code)
+	valid, err := totp.Validate(mfaUser.Secret, req.Code, time.Now(), s.mfa.totpConfig())
+	if err != nil {
+		lg.Errorf("VerifyMFA: %v", err)
+		return nil, status.Error(codes.Internal, "internal error")
+	}
 
 	if !valid {
 		lg.Debugf("MFA verify: invalid code for user %s", challenge.UserID)
@@ -481,29 +485,6 @@ func (s *AuthServer) GenerateBackupCodes(
 	return &authv1.GenerateBackupCodesResponse{BackupCodes: backupCodes}, nil
 }
 
-// verifyCode checks a presented code against the user's MFA secret: first as
-// a TOTP code, then as a single-use backup code. The backup-code path
-// normalizes the input (separators/case) and hands it to the database layer,
-// which verifies it against the stored Argon2id hashes and atomically claims
-// the matching row, so a used code can never be replayed. Any error is
-// treated as invalid (fail closed — the caller counts it as an attempt).
-func (s *AuthServer) verifyCode(ctx context.Context, secret, userID, code string) bool {
-	valid, err := totp.Validate(secret, code, time.Now(), s.mfa.totpConfig())
-	if err == nil && valid {
-		return true
-	}
-
-	normalized := normalizeBackupCode(code)
-	if normalized == "" {
-		return false
-	}
-	claimed, err := s.DB().ConsumeBackupCode(ctx, userID, normalized)
-	if err != nil {
-		s.Logger().Warnf("verifyCode: %v", err)
-		return false
-	}
-	return claimed
-}
 
 // generateAndStoreBackupCodes generates a fresh backup-code set, hashes each
 // code with Argon2id, and replaces the stored set. Returns the plaintext

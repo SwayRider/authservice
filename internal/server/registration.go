@@ -41,18 +41,25 @@ import (
 // The verification URL in the request is provided by the caller (mobile app, web app)
 // since different clients have different verification page URLs.
 //
-// To prevent account/invite enumeration, every outcome that could reveal
-// whether an email is already registered or (in INVITE_ONLY mode) already
-// invited returns the same generic success response with an empty UserId --
-// mirroring the anti-enumeration pattern already used by VerifyEmail and
-// RequestPasswordReset in this file. If the email turns out to already have
-// an account, the real owner is notified asynchronously via the same
-// password-reset email RequestPasswordReset would send them. Only
-// non-enumerating failures (weak password, infrastructure errors) return a
-// distinct error.
+// To prevent account enumeration, an outcome that could reveal whether an
+// email is already registered returns the same generic success response
+// with an empty UserId -- mirroring the anti-enumeration pattern already
+// used by VerifyEmail and RequestPasswordReset in this file. If the email
+// turns out to already have an account, the real owner is notified
+// asynchronously via the same password-reset email RequestPasswordReset
+// would send them.
+//
+// Deliberate, scoped exception: in INVITE_ONLY mode, a non-invited email
+// gets an explicit codes.PermissionDenied rather than the generic response.
+// This intentionally reveals invite status to an unauthenticated caller --
+// an owner-approved tradeoff (see CLAUDE.md and Docs/AuthImprovement) made
+// because the invite pool is small, invited users register quickly, and
+// completing registration for an invited email requires mailbox access
+// regardless of whether invite status is known.
 //
 // Returns:
 //   - codes.InvalidArgument: If password is too weak
+//   - codes.PermissionDenied: In INVITE_ONLY mode, if the email has no invitation
 //   - codes.Internal: On infrastructure/database errors
 func (s *AuthServer) Register(
 	ctx context.Context,
@@ -102,7 +109,7 @@ func (s *AuthServer) Register(
 		}
 		if !invited {
 			lg.Debugf("registration attempt for non-invited email %s", req.Email)
-			return resp, nil
+			return nil, status.Errorf(codes.PermissionDenied, "invitation required")
 		}
 	}
 

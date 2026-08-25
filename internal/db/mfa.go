@@ -138,6 +138,38 @@ func (d *DB) GetMFASecret(ctx context.Context, userID string) (*MFAUser, error) 
 	return &row, nil
 }
 
+// ReplaceMFASecret swaps in a new TOTP secret for a user who already has an
+// enabled enrollment, leaving enabled untouched (unlike CreateMFASecret,
+// which always resets enabled to false). Used by the email-verified MFA
+// reset flow (internal/web/reset_mfa.go), where the old secret must stay
+// valid right up until the new one is confirmed -- there is no window where
+// the account has no working second factor.
+func (d *DB) ReplaceMFASecret(ctx context.Context, userID, secret string) error {
+	lg := d.lg.Derive(log.WithFunction("ReplaceMFASecret"))
+
+	if err := d.checkConnection(); err != nil {
+		lg.Warnf("ReplaceMFASecret: %v", err)
+		return err
+	}
+
+	storedSecret, keyID, err := encryptSecret(secret, d.keyRing)
+	if err != nil {
+		lg.Errorf("ReplaceMFASecret: %v", err)
+		return err
+	}
+
+	_, err = d.ExecContext(ctx, `
+		UPDATE user_mfa
+		SET secret = $2, secret_key_id = $3, updated_at = now()
+		WHERE user_id = $1
+	`, userID, storedSecret, sql.NullString{String: keyID, Valid: keyID != ""})
+	if err != nil {
+		lg.Warnf("ReplaceMFASecret: %v", err)
+		return err
+	}
+	return nil
+}
+
 // GetMFAStatus reports whether the user's MFA is enabled. A user with no
 // enrollment row reports false (no error).
 func (d *DB) GetMFAStatus(ctx context.Context, userID string) (bool, error) {
